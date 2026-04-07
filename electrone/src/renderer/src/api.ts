@@ -1,6 +1,7 @@
 import type {
   Action,
   ActionResponse,
+  ApplyPendingResponse,
   BackResponse,
   BrowseResponse,
   CurrentResponse,
@@ -58,6 +59,10 @@ export async function apiDeleteCount(): Promise<DeleteCountResponse> {
 
 export async function apiPurgeDeleted(): Promise<PurgeResponse> {
   return eAPI.purgeDeleted();
+}
+
+export async function apiApplyPending(): Promise<ApplyPendingResponse> {
+  return eAPI.applyPending();
 }
 
 export async function apiOpenFolderDialog(): Promise<string | null> {

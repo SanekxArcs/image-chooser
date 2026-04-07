@@ -3,7 +3,7 @@ import { flushSync } from 'react-dom';
 import { ChevronLeft } from 'lucide-react';
 
 import type { Action, MediaItem, Stats } from '../types';
-import { apiAction, apiBack, apiCurrent, apiGetMediaPath, apiSkip } from '../api';
+import { apiAction, apiApplyPending, apiBack, apiCurrent, apiGetMediaPath, apiSkip } from '../api';
 import DoneScreen from './DoneScreen';
 import DPad from './DPad';
 
@@ -24,7 +24,7 @@ interface ImageState {
   done: boolean;
 }
 
-const EMPTY: MediaItem = { url: '', isVideo: false };
+const EMPTY: MediaItem = { url: null, isVideo: false };
 const EXIT_DIR: Record<Action, string> = { keep: 'right', delete: 'left', later: 'down' };
 
 function loadMedia(item: MediaItem): Promise<void> {
@@ -62,6 +62,8 @@ export default function ViewerScreen({ initialStats, startDone, onChooseAnother 
     prev: EMPTY, main: EMPTY, peek1: EMPTY, showPeek1: false,
     filename: '', index: 0, total: 0, done: startDone,
   });
+  const [isMuted, setIsMuted] = useState(true);
+  const [isApplying, setIsApplying] = useState(false);
 
   const busyRef = useRef(false);
   const cardRef = useRef<HTMLDivElement>(null);
@@ -101,6 +103,23 @@ export default function ViewerScreen({ initialStats, startDone, onChooseAnother 
     if (startDone) return;
     void fetchNextState().then(state => setImgState(state));
   }, [startDone]);
+
+  // Apply all queued file moves when processing is done
+  useEffect(() => {
+    if (!imgState.done) return;
+    setIsApplying(true);
+    void apiApplyPending().finally(() => setIsApplying(false));
+  }, [imgState.done]);
+
+  // Wrap onChooseAnother to flush pending moves first
+  const handleChooseAnother = useCallback(() => {
+    if (busyRef.current) return;
+    setIsApplying(true);
+    void apiApplyPending().finally(() => {
+      setIsApplying(false);
+      onChooseAnother();
+    });
+  }, [onChooseAnother]);
 
   const flash = useCallback((btn: HTMLButtonElement | null) => {
     if (!btn) return;
@@ -164,12 +183,13 @@ export default function ViewerScreen({ initialStats, startDone, onChooseAnother 
         case 'ArrowDown':  flash(btnLaterRef.current);  doAction('later');  break;
         case 'ArrowUp':    flash(btnUndoRef.current);   doBack();           break;
         case ' ':          e.preventDefault(); flash(btnSkipRef.current); doSkip(); break;
-        case 'Escape':     onChooseAnother(); break;
+        case 'Escape':     handleChooseAnother(); break;
+        case 'Shift':      setIsMuted(prev => !prev); break;
       }
     }
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [doAction, doBack, doSkip, flash, imgState.done, onChooseAnother]);
+  }, [doAction, doBack, doSkip, flash, imgState.done, handleChooseAnother]);
 
   // Drag on main card
   useEffect(() => {
@@ -221,12 +241,25 @@ export default function ViewerScreen({ initialStats, startDone, onChooseAnother 
   return (
     <div className="flex flex-col overflow-hidden" style={{ height: '100vh', background: 'var(--bg)' }}>
 
+      {/* Applying overlay */}
+      {isApplying && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 100,
+          background: 'rgba(0,0,0,0.75)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <span style={{ color: 'var(--text)', fontSize: '0.9rem', fontWeight: 500 }}>
+            Applying changes…
+          </span>
+        </div>
+      )}
+
       {/* ── Top bar ── */}
       <div className="flex-shrink-0 flex items-center relative px-3" style={{ height: '36px' }}>
         {/* Folder button (Esc) */}
         <button
           type="button"
-          onClick={onChooseAnother}
+          onClick={handleChooseAnother}
           title="Back to folder (Esc)"
           className="flex items-center gap-1 text-xs transition-colors"
           style={{
@@ -261,7 +294,7 @@ export default function ViewerScreen({ initialStats, startDone, onChooseAnother 
       {/* ── Media area ── */}
       {done ? (
         <div className="flex-1 flex items-center justify-center">
-          <DoneScreen stats={stats} onChooseAnother={onChooseAnother} />
+          <DoneScreen stats={stats} onChooseAnother={handleChooseAnother} />
         </div>
       ) : (
         <div className="flex-1 min-h-0 flex gap-1.5 p-1.5">
@@ -280,9 +313,18 @@ export default function ViewerScreen({ initialStats, startDone, onChooseAnother 
               userSelect: 'none',
             }}
           >
-            {main.isVideo ? (
+            {main.url && (main.isVideo ? (
               <video
-                src={main.url} autoPlay loop muted playsInline draggable={false}
+                key={main.url}
+                src={main.url} autoPlay loop muted={isMuted} playsInline draggable={false}
+                onError={() => {
+                  console.error('Video error:', main.url);
+                  // Optionally skip automatically if it's broken
+                  // doSkip(); 
+                }}
+                onCanPlay={() => {
+                  // Video is ready, maybe hide a loader if we had one
+                }}
                 style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block', viewTransitionName: 'main-card' }}
               />
             ) : (
@@ -290,7 +332,7 @@ export default function ViewerScreen({ initialStats, startDone, onChooseAnother 
                 src={main.url} alt="" draggable={false}
                 style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block', viewTransitionName: 'main-card' }}
               />
-            )}
+            ))}
             {/* Drag labels */}
             <div ref={labelKeepRef}   style={{ ...labelBase, right: '12px', background: 'rgba(5,25,15,0.9)', border: '1px solid var(--keep)',   color: 'var(--keep)'   }}>Keep</div>
             <div ref={labelDeleteRef} style={{ ...labelBase, left: '12px',  background: 'rgba(25,5,10,0.9)', border: '1px solid var(--delete)', color: 'var(--delete)' }}>Delete</div>
@@ -345,7 +387,8 @@ function SidePanel({ media, side }: { media: MediaItem; side: 'left' | 'right' }
       {media.url && (
         media.isVideo ? (
           <video
-            src={media.url} muted playsInline draggable={false}
+            key={media.url}
+            src={media.url} autoPlay loop muted playsInline draggable={false}
             style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', opacity: 0.45 }}
           />
         ) : (

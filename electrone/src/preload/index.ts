@@ -12,5 +12,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   browse: (path: string) => ipcRenderer.invoke('browse', path),
   getDeleteCount: () => ipcRenderer.invoke('get-delete-count'),
   purgeDeleted: () => ipcRenderer.invoke('purge-deleted'),
+  applyPending: () => ipcRenderer.invoke('apply-pending'),
   openFolderDialog: () => ipcRenderer.invoke('open-folder-dialog') as Promise<string | null>,
 })

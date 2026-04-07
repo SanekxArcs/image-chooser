@@ -34,9 +34,9 @@ export default function App() {
     return () => { cancelled = true; };
   }, []);
 
-  function handleFolderSelected(_folder: string) {
-    setInitialStats({ kept: 0, deleted: 0, later: 0 });
-    setStartDone(false);
+  function handleFolderSelected(_folder: string, stats: Stats, startDone: boolean) {
+    setInitialStats(stats);
+    setStartDone(startDone);
     setScreen('viewer');
   }
 

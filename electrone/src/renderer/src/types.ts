@@ -1,7 +1,7 @@
 export type Action = 'keep' | 'later' | 'delete';
 
 export interface MediaItem {
-  url: string;
+  url: string | null;
   isVideo: boolean;
 }
 
@@ -49,6 +49,11 @@ export interface BackResponse {
 export interface SetFolderResponse {
   total: number;
   index: number;
+  stats: Stats;
+}
+
+export interface ApplyPendingResponse {
+  applied: boolean;
 }
 
 export interface DrivesResponse {

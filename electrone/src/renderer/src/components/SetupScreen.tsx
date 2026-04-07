@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { FolderOpen, Loader2 } from "lucide-react";
 import { apiSetFolder, apiOpenFolderDialog } from "../api";
+import type { Stats } from "../types";
 
 interface Props {
-  onFolderSelected: (folder: string) => void;
+  onFolderSelected: (folder: string, stats: Stats, startDone: boolean) => void;
 }
 
 export default function SetupScreen({ onFolderSelected }: Props) {
@@ -18,12 +19,16 @@ export default function SetupScreen({ onFolderSelected }: Props) {
     setError("");
     try {
       const data = await apiSetFolder(path);
-      if (data.total === 0) {
+      if (data.total === 0 && !data.stats.kept && !data.stats.deleted && !data.stats.later) {
         setError("No images or videos found in that folder.");
         setLoading(false);
         return;
       }
-      onFolderSelected(path);
+      onFolderSelected(
+        path,
+        data.stats,
+        (data.index ?? 0) >= data.total,
+      );
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to open folder.");
       setLoading(false);
@@ -105,10 +110,12 @@ export default function SetupScreen({ onFolderSelected }: Props) {
             ["↓", "Later"],
             ["↑", "Undo"],
             ["Space", "Skip"],
+            ["Shift", "Sound"],
+            ["Escape", "Folder choose"],
           ].map(([key, label]) => (
             <div
               key={key}
-              className="flex last:col-span-2 mx-auto items-center gap-2"
+              className="flex mx-auto last:col-span-2 cursor-default items-center gap-2"
             >
               <kbd
                 className="inline-flex items-center justify-center text-xs px-1.5 py-0.5 font-mono"
