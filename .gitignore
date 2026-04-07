@@ -1,0 +1,8 @@
+node_modules
+client/node_modules
+client/dist
+electrone/dist-electron
+electrone/node_modules
+electrone/out
+dist
+
