@@ -1,0 +1,88 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── CSS Variables ── */
+:root {
+  --bg: #0f0f13;
+  --surface: #1a1a24;
+  --border: #2a2a3a;
+  --text: #e8e8f0;
+  --muted: #888899;
+  --keep: #22c55e;
+  --delete: #ef4444;
+  --later: #f59e0b;
+  --back: #6366f1;
+  --radius: 18px;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  margin: 0;
+  padding: 0;
+}
+
+/* ── View Transitions ── */
+
+/* Peek cards: simple cross-fade */
+::view-transition-group(peek-1) {
+  animation-duration: 0.35s;
+}
+
+/* Main card enter: always scale up from slightly smaller */
+::view-transition-new(main-card) {
+  animation: vt-card-enter 0.35s cubic-bezier(0.34, 1.2, 0.64, 1) both;
+}
+
+/* Main card exit direction — set data-exit on <html> before transition */
+html[data-exit="right"]::view-transition-old(main-card) {
+  animation: vt-fly-right 0.32s ease-in forwards;
+}
+html[data-exit="left"]::view-transition-old(main-card) {
+  animation: vt-fly-left 0.32s ease-in forwards;
+}
+html[data-exit="down"]::view-transition-old(main-card) {
+  animation: vt-fly-down 0.32s ease-in forwards;
+}
+html[data-exit="undo"]::view-transition-old(main-card) {
+  animation: vt-fly-up 0.22s ease-in forwards;
+}
+html[data-exit="undo"]::view-transition-new(main-card) {
+  animation: vt-card-enter-top 0.35s cubic-bezier(0.34, 1.2, 0.64, 1) both;
+}
+
+@keyframes vt-fly-right      { to { transform: translateX(130%) rotate(12deg);  opacity: 0; } }
+@keyframes vt-fly-left       { to { transform: translateX(-130%) rotate(-12deg); opacity: 0; } }
+@keyframes vt-fly-down       { to { transform: translateY(90%) scale(0.85);      opacity: 0; } }
+@keyframes vt-fly-up         { to { transform: translateY(-60%) scale(0.85);     opacity: 0; } }
+@keyframes vt-card-enter     { from { transform: scale(0.9) translateY(10px);    opacity: 0; } }
+@keyframes vt-card-enter-top { from { transform: scale(0.9) translateY(-10px);   opacity: 0; } }
+
+/* ── Button flash animation ── */
+@keyframes btnFlash {
+  0%   { filter: brightness(1); }
+  30%  { filter: brightness(2.2); transform: scale(1.12); }
+  100% { filter: brightness(1); transform: scale(1); }
+}
+
+.flash {
+  animation: btnFlash 0.25s ease !important;
+}
+
+/* ── D-pad action buttons ── */
+.action-btn {
+  transition: transform 0.12s, box-shadow 0.15s, filter 0.15s;
+}
+.action-btn:hover  { transform: scale(1.07); filter: brightness(1.2); }
+.action-btn:active { transform: scale(0.94); }

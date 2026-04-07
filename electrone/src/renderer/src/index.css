@@ -1,0 +1,77 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Design tokens ── */
+:root {
+  --bg:         #090d0b;
+  --surface:    #101a13;
+  --surface-2:  #162019;
+  --border:     #1c2e22;
+  --border-2:   #264033;
+  --text:       #d1fae5;
+  --muted:      #4d7a61;
+  --keep:       #10b981;
+  --delete:     #f43f5e;
+  --later:      #f59e0b;
+  --back:       #818cf8;
+  --radius:     6px;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body, #root {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  margin: 0;
+  padding: 0;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 2px; }
+
+/* ── View Transitions ── */
+::view-transition-group(peek-1) { animation-duration: 0.3s; }
+
+::view-transition-new(main-card) {
+  animation: vt-card-enter 0.3s cubic-bezier(0.34, 1.2, 0.64, 1) both;
+}
+
+html[data-exit="right"]::view-transition-old(main-card)  { animation: vt-fly-right 0.28s ease-in forwards; }
+html[data-exit="left"]::view-transition-old(main-card)   { animation: vt-fly-left  0.28s ease-in forwards; }
+html[data-exit="down"]::view-transition-old(main-card)   { animation: vt-fly-down  0.28s ease-in forwards; }
+html[data-exit="undo"]::view-transition-old(main-card)   { animation: vt-fly-up    0.2s  ease-in forwards; }
+html[data-exit="undo"]::view-transition-new(main-card)   { animation: vt-card-enter-top 0.3s cubic-bezier(0.34, 1.2, 0.64, 1) both; }
+html[data-exit="skip"]::view-transition-old(main-card)   { animation: vt-fade-skip 0.18s ease forwards; }
+
+@keyframes vt-fade-skip      { to { opacity: 0; transform: scale(0.97); } }
+@keyframes vt-fly-right      { to { transform: translateX(130%) rotate(10deg);   opacity: 0; } }
+@keyframes vt-fly-left       { to { transform: translateX(-130%) rotate(-10deg); opacity: 0; } }
+@keyframes vt-fly-down       { to { transform: translateY(90%) scale(0.88);      opacity: 0; } }
+@keyframes vt-fly-up         { to { transform: translateY(-60%) scale(0.88);     opacity: 0; } }
+@keyframes vt-card-enter     { from { transform: scale(0.92) translateY(8px);    opacity: 0; } }
+@keyframes vt-card-enter-top { from { transform: scale(0.92) translateY(-8px);   opacity: 0; } }
+
+/* ── Button flash ── */
+@keyframes btnFlash {
+  0%   { filter: brightness(1); }
+  30%  { filter: brightness(1.8); transform: scale(1.08); }
+  100% { filter: brightness(1); transform: scale(1); }
+}
+.flash { animation: btnFlash 0.22s ease !important; }
+
+/* ── Action buttons ── */
+.action-btn {
+  transition: background-color 0.12s, border-color 0.12s, transform 0.1s;
+}
+.action-btn:hover  { filter: brightness(1.15); }
+.action-btn:active { transform: scale(0.95); }

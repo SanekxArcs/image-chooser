@@ -1,0 +1,20 @@
+HOW TO RUN IMAGE CHOOSER LOCALLY
+==================================
+
+1. Double-click launch.bat  (or make a shortcut with an icon — see below)
+   - Console opens, server starts, browser opens http://localhost:3456
+   - Close the console to stop the server
+   - Leave the console minimized to keep it running full-time
+
+Port 3456 is non-standard so it won't conflict with other local services.
+
+
+MAKING A PROPER DESKTOP ICON
+------------------------------
+
+1. Right-click launch.bat -> Create shortcut
+2. Right-click the shortcut -> Properties -> Change Icon...
+3. In the icon picker box paste this path and hit Enter:
+   %SystemRoot%\system32\imageres.dll
+4. That has hundreds of built-in Windows icons - pick a photo/gallery one.
+5. Drag the shortcut to your Desktop or taskbar.

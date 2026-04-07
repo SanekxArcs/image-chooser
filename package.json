@@ -1,0 +1,18 @@
+{
+  "name": "image-chooser",
+  "version": "1.0.0",
+  "description": "Tinder-like image organizer",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "concurrently \"node server.js\" \"npm run dev --prefix client\"",
+    "build": "npm run build --prefix client",
+    "preview": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0"
+  }
+}

@@ -1,0 +1,15 @@
+appId: com.imagechooser.app
+productName: Image Chooser
+directories:
+  output: dist-electron
+files:
+  - out/main/**/*
+  - out/preload/**/*
+  - out/renderer/**/*
+win:
+  target:
+    - target: nsis
+      arch: x64
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true

@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Image Chooser</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- Folder picker screen -->
+  <div id="setup-screen" class="screen active">
+    <div class="setup-box">
+      <h1>Image Chooser</h1>
+      <p class="subtitle">Tinder for your images</p>
+      <div class="input-group">
+        <input type="text" id="folder-input" placeholder="Paste a path, or click Browse…" />
+        <button type="button" id="browse-btn">Browse</button>
+        <button type="button" id="start-btn">Start</button>
+      </div>
+      <p id="setup-error" class="error-msg"></p>
+      <div class="tips">
+        <span>Keep → do nothing</span>
+        <span>Later → move to _later folder</span>
+        <span>Delete → permanently delete</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Folder browser modal -->
+  <div id="browser-overlay" class="browser-overlay hidden">
+    <div class="browser-modal">
+      <div class="browser-header">
+        <span class="browser-title">Choose a folder</span>
+        <button type="button" id="browser-close">&#10005;</button>
+      </div>
+      <div class="browser-breadcrumb" id="browser-breadcrumb"></div>
+      <div class="browser-list" id="browser-list"></div>
+      <div class="browser-footer">
+        <span id="browser-image-count" class="browser-img-count"></span>
+        <button type="button" id="browser-select" class="browser-select-btn" disabled>
+          Select this folder
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main viewer screen -->
+  <div id="viewer-screen" class="screen">
+    <header>
+      <button type="button" id="change-folder-btn" title="Change folder">&#8592; Folder</button>
+      <div id="progress-bar-wrap">
+        <div id="progress-bar"></div>
+      </div>
+      <span id="counter-left" class="counter-left">— left</span>
+    </header>
+    <div id="stats-bar">
+      <span class="stat stat-keep">  <span class="stat-icon">&#10003;</span> <span id="stat-kept">0</span></span>
+      <span class="stat stat-later"> <span class="stat-icon">&#128337;</span> <span id="stat-later">0</span></span>
+      <span class="stat stat-delete"><span class="stat-icon">&#128465;</span> <span id="stat-deleted">0</span></span>
+    </div>
+
+    <div id="card-area">
+      <div id="card-stack">
+        <!-- Peek cards (behind main card, show next images) -->
+        <div id="peek-2" class="peek-card"><img id="peek-2-img" src="" alt="" draggable="false" /></div>
+        <div id="peek-1" class="peek-card"><img id="peek-1-img" src="" alt="" draggable="false" /></div>
+        <!-- Main card -->
+        <div id="card" class="card">
+          <img id="main-img" src="" alt="" draggable="false" />
+          <div id="label-keep" class="card-label label-keep">KEEP</div>
+          <div id="label-delete" class="card-label label-delete">DELETE</div>
+          <div id="label-later" class="card-label label-later">LATER</div>
+        </div>
+      </div>
+
+      <div id="done-card" class="done-card hidden">
+        <div class="done-icon">&#10003;</div>
+        <h2>All done!</h2>
+        <p id="done-stats"></p>
+        <div class="done-actions">
+          <button type="button" id="purge-btn" class="purge-btn hidden">
+            &#128465; Permanently delete <span id="purge-count"></span> files
+          </button>
+          <button type="button" id="restart-btn">Choose another folder</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="filename-bar"></div>
+
+    <div id="action-bar">
+      <!-- D-pad cross layout: up=undo, left=delete, right=keep, down=later -->
+      <div class="dpad">
+        <!-- Top: Undo -->
+        <button type="button" class="action-btn btn-back" id="btn-back" style="grid-area:top">
+          <span class="dpad-arrow">&#8593;</span>
+          <span class="btn-icon">&#8634;</span>
+          <span class="btn-label">Undo</span>
+        </button>
+        <!-- Left: Delete -->
+        <button type="button" class="action-btn btn-delete" id="btn-delete" style="grid-area:left">
+          <span class="dpad-arrow">&#8592;</span>
+          <span class="btn-icon">&#128465;</span>
+          <span class="btn-label">Delete</span>
+        </button>
+        <!-- Center: decorative D-pad nub -->
+        <div class="dpad-center" style="grid-area:mid"></div>
+        <!-- Right: Keep -->
+        <button type="button" class="action-btn btn-keep" id="btn-keep" style="grid-area:right">
+          <span class="dpad-arrow">&#8594;</span>
+          <span class="btn-icon">&#10003;</span>
+          <span class="btn-label">Keep</span>
+        </button>
+        <!-- Bottom: Later -->
+        <button type="button" class="action-btn btn-later" id="btn-later" style="grid-area:bot">
+          <span class="dpad-arrow">&#8595;</span>
+          <span class="btn-icon">&#128337;</span>
+          <span class="btn-label">Later</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
