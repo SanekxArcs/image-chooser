@@ -9,7 +9,8 @@
     "build:renderer": "vite build --config vite.config.ts",
     "build": "npm run build:main && npm run build:renderer",
     "pack": "npm run build && electron-builder --win --dir",
-    "dist": "npm run build && electron-builder --win"
+    "dist": "npm run build && electron-builder --win",
+    "dist:mac": "npm run build && electron-builder --mac"
   },
   "dependencies": {},
   "devDependencies": {

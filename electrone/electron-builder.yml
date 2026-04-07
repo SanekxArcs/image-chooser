@@ -10,6 +10,11 @@ win:
   target:
     - target: nsis
       arch: x64
+mac:
+  target:
+    - dmg
+    - zip
+  category: public.app-category.photography
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
