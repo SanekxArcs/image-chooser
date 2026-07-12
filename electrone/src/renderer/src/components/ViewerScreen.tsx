@@ -2,8 +2,19 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { ChevronLeft } from 'lucide-react';
 
-import type { Action, MediaItem, Stats } from '../types';
-import { apiAction, apiApplyPending, apiBack, apiCurrent, apiGetMediaPath, apiSkip } from '../api';
+import type { Action, DisplaySettings, MediaItem, ShortcutFolder, Stats } from '../types';
+import {
+  apiAction,
+  apiActionShortcut,
+  apiApplyPending,
+  apiBack,
+  apiCurrent,
+  apiGetDisplaySettings,
+  apiGetMediaPath,
+  apiGetShortcuts,
+  apiSkip,
+} from '../api';
+import { folderBaseName, truncateName } from '../utils';
 import DoneScreen from './DoneScreen';
 import DPad from './DPad';
 
@@ -64,22 +75,31 @@ export default function ViewerScreen({ initialStats, startDone, onChooseAnother 
   });
   const [isMuted, setIsMuted] = useState(true);
   const [isApplying, setIsApplying] = useState(false);
+  const [shortcuts, setShortcuts] = useState<ShortcutFolder[]>([]);
+  const [display, setDisplay] = useState<DisplaySettings>({ truncateLength: 10, layout: 'bottom' });
 
   const busyRef = useRef(false);
   const cardRef = useRef<HTMLDivElement>(null);
   const labelKeepRef = useRef<HTMLDivElement>(null);
   const labelDeleteRef = useRef<HTMLDivElement>(null);
   const labelLaterRef = useRef<HTMLDivElement>(null);
+  const labelShortcutRef = useRef<HTMLDivElement>(null);
   const btnKeepRef = useRef<HTMLButtonElement>(null);
   const btnDeleteRef = useRef<HTMLButtonElement>(null);
   const btnLaterRef = useRef<HTMLButtonElement>(null);
   const btnUndoRef = useRef<HTMLButtonElement>(null);
   const btnSkipRef = useRef<HTMLButtonElement>(null);
 
+  useEffect(() => {
+    void apiGetShortcuts().then(setShortcuts);
+    void apiGetDisplaySettings().then(setDisplay);
+  }, []);
+
   const resetLabels = useCallback(() => {
     if (labelKeepRef.current)   labelKeepRef.current.style.opacity   = '0';
     if (labelDeleteRef.current) labelDeleteRef.current.style.opacity = '0';
     if (labelLaterRef.current)  labelLaterRef.current.style.opacity  = '0';
+    if (labelShortcutRef.current) labelShortcutRef.current.style.opacity = '0';
   }, []);
 
   // Preserve current main as prev when applying new state
@@ -146,6 +166,22 @@ export default function ViewerScreen({ initialStats, startDone, onChooseAnother 
     })();
   }, [withTransition]);
 
+  const doShortcutAction = useCallback((key: string, folderPath: string) => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    const labelEl = labelShortcutRef.current;
+    if (labelEl) {
+      const name = folderPath.split(/[/\\]/).filter(Boolean).pop() ?? folderPath;
+      labelEl.textContent = `→ ${name}`;
+      labelEl.style.opacity = '1';
+    }
+    void (async () => {
+      await apiActionShortcut(key);
+      await withTransition('skip', fetchNextState);
+      busyRef.current = false;
+    })();
+  }, [withTransition]);
+
   const doSkip = useCallback(() => {
     if (busyRef.current) return;
     busyRef.current = true;
@@ -178,18 +214,20 @@ export default function ViewerScreen({ initialStats, startDone, onChooseAnother 
       if (imgState.done) return;
       if ((e.target as HTMLElement).tagName === 'INPUT') return;
       switch (e.key) {
-        case 'ArrowRight': flash(btnKeepRef.current);   doAction('keep');   break;
-        case 'ArrowLeft':  flash(btnDeleteRef.current); doAction('delete'); break;
-        case 'ArrowDown':  flash(btnLaterRef.current);  doAction('later');  break;
-        case 'ArrowUp':    flash(btnUndoRef.current);   doBack();           break;
-        case ' ':          e.preventDefault(); flash(btnSkipRef.current); doSkip(); break;
-        case 'Escape':     handleChooseAnother(); break;
-        case 'Shift':      setIsMuted(prev => !prev); break;
+        case 'ArrowRight': flash(btnKeepRef.current);   doAction('keep');   return;
+        case 'ArrowLeft':  flash(btnDeleteRef.current); doAction('delete'); return;
+        case 'ArrowDown':  flash(btnLaterRef.current);  doAction('later');  return;
+        case 'ArrowUp':    flash(btnUndoRef.current);   doBack();           return;
+        case ' ':          e.preventDefault(); flash(btnSkipRef.current); doSkip(); return;
+        case 'Escape':     handleChooseAnother(); return;
+        case 'Shift':      setIsMuted(prev => !prev); return;
       }
+      const match = shortcuts.find(s => s.key === e.key.toLowerCase());
+      if (match) doShortcutAction(match.key, match.folderPath);
     }
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [doAction, doBack, doSkip, flash, imgState.done, handleChooseAnother]);
+  }, [doAction, doBack, doSkip, doShortcutAction, flash, imgState.done, handleChooseAnother, shortcuts]);
 
   // Drag on main card
   useEffect(() => {
@@ -299,6 +337,8 @@ export default function ViewerScreen({ initialStats, startDone, onChooseAnother 
       ) : (
         <div className="flex-1 min-h-0 flex gap-1.5 p-1.5">
 
+          {display.layout === 'left' && <ShortcutRail shortcuts={shortcuts} display={display} />}
+
           {/* Left — prev media */}
           <SidePanel media={prev} side="left" />
 
@@ -337,11 +377,14 @@ export default function ViewerScreen({ initialStats, startDone, onChooseAnother 
             <div ref={labelKeepRef}   style={{ ...labelBase, right: '12px', background: 'rgba(5,25,15,0.9)', border: '1px solid var(--keep)',   color: 'var(--keep)'   }}>Keep</div>
             <div ref={labelDeleteRef} style={{ ...labelBase, left: '12px',  background: 'rgba(25,5,10,0.9)', border: '1px solid var(--delete)', color: 'var(--delete)' }}>Delete</div>
             <div ref={labelLaterRef}  style={{ ...labelBase, left: '50%', transform: 'translateX(-50%)', background: 'rgba(20,15,5,0.9)', border: '1px solid var(--later)',  color: 'var(--later)'  }}>Later</div>
+            <div ref={labelShortcutRef} style={{ ...labelBase, top: 'auto', bottom: '14px', left: '50%', transform: 'translateX(-50%)', background: 'rgba(10,10,20,0.9)', border: '1px solid var(--muted)', color: 'var(--text)' }} />
           </div>
 
           {/* Right — next media */}
           {showPeek1 && <SidePanel media={peek1} side="right" />}
           {!showPeek1 && <div style={{ width: '144px', flexShrink: 0 }} />}
+
+          {display.layout === 'right' && <ShortcutRail shortcuts={shortcuts} display={display} />}
 
         </div>
       )}
@@ -364,6 +407,73 @@ export default function ViewerScreen({ initialStats, startDone, onChooseAnother 
           />
         </div>
       )}
+
+      {/* ── Shortcut legend (bottom layout) ── */}
+      {!done && display.layout === 'bottom' && (
+        <ShortcutBar shortcuts={shortcuts} display={display} />
+      )}
+    </div>
+  );
+}
+
+// ── Shortcut legend ───────────────────────────────────────────────────────────
+
+const kbdStyle: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+  fontSize: '0.65rem', fontFamily: 'monospace', fontWeight: 700,
+  padding: '1px 5px', minWidth: '16px',
+  background: 'var(--bg)', border: '1px solid var(--border-2)', borderRadius: '4px',
+  color: 'var(--text)', textTransform: 'uppercase',
+};
+
+function ShortcutBar({ shortcuts, display }: { shortcuts: ShortcutFolder[]; display: DisplaySettings }) {
+  if (shortcuts.length === 0) return null;
+  return (
+    <div className="flex-shrink-0 flex flex-wrap justify-center gap-2 px-3 pb-2.5">
+      {shortcuts.map(s => {
+        const name = folderBaseName(s.folderPath);
+        return (
+          <div
+            key={s.key}
+            title={name}
+            className="flex items-center gap-1.5 text-xs"
+            style={{
+              background: 'var(--surface)', border: '1px solid var(--border)',
+              borderRadius: 'var(--radius)', padding: '4px 8px', color: 'var(--muted)',
+            }}
+          >
+            <kbd style={kbdStyle}>{s.key}</kbd>
+            <span>{truncateName(name, display.truncateLength)}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ShortcutRail({ shortcuts, display }: { shortcuts: ShortcutFolder[]; display: DisplaySettings }) {
+  if (shortcuts.length === 0) return null;
+  return (
+    <div className="flex flex-col gap-1.5 overflow-y-auto" style={{ width: '84px', flexShrink: 0 }}>
+      {shortcuts.map(s => {
+        const name = folderBaseName(s.folderPath);
+        return (
+          <div
+            key={s.key}
+            title={name}
+            className="flex flex-col items-center gap-1 text-center"
+            style={{
+              background: 'var(--surface)', border: '1px solid var(--border)',
+              borderRadius: 'var(--radius)', padding: '6px 4px', flexShrink: 0,
+            }}
+          >
+            <kbd style={kbdStyle}>{s.key}</kbd>
+            <span className="truncate w-full" style={{ fontSize: '0.6rem', color: 'var(--muted)' }}>
+              {truncateName(name, display.truncateLength)}
+            </span>
+          </div>
+        );
+      })}
     </div>
   );
 }

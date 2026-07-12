@@ -6,11 +6,13 @@ import type {
   BrowseResponse,
   CurrentResponse,
   DeleteCountResponse,
+  DisplaySettings,
   DrivesResponse,
   MediaPathResponse,
   PurgeResponse,
   SessionResponse,
   SetFolderResponse,
+  ShortcutFolder,
 } from './types';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -31,6 +33,10 @@ export async function apiGetMediaPath(offset: 0 | 1): Promise<MediaPathResponse>
 
 export async function apiAction(action: Action): Promise<ActionResponse> {
   return eAPI.action(action);
+}
+
+export async function apiActionShortcut(key: string): Promise<ActionResponse> {
+  return eAPI.actionShortcut(key);
 }
 
 export async function apiSkip(): Promise<ActionResponse> {
@@ -65,6 +71,22 @@ export async function apiApplyPending(): Promise<ApplyPendingResponse> {
   return eAPI.applyPending();
 }
 
-export async function apiOpenFolderDialog(): Promise<string | null> {
-  return eAPI.openFolderDialog();
+export async function apiOpenFolderDialog(title?: string): Promise<string | null> {
+  return eAPI.openFolderDialog(title);
+}
+
+export async function apiGetShortcuts(): Promise<ShortcutFolder[]> {
+  return eAPI.getShortcuts();
+}
+
+export async function apiSaveShortcuts(list: ShortcutFolder[]): Promise<ShortcutFolder[]> {
+  return eAPI.saveShortcuts(list);
+}
+
+export async function apiGetDisplaySettings(): Promise<DisplaySettings> {
+  return eAPI.getDisplaySettings();
+}
+
+export async function apiSaveDisplaySettings(settings: DisplaySettings): Promise<DisplaySettings> {
+  return eAPI.saveDisplaySettings(settings);
 }

@@ -4,8 +4,9 @@ import type { Stats } from './types';
 import { apiSession } from './api';
 import SetupScreen from './components/SetupScreen';
 import ViewerScreen from './components/ViewerScreen';
+import SettingsScreen from './components/SettingsScreen';
 
-type Screen = 'setup' | 'viewer';
+type Screen = 'setup' | 'viewer' | 'settings';
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>('setup');
@@ -56,9 +57,14 @@ export default function App() {
     );
   }
 
+  if (screen === 'settings') {
+    return <SettingsScreen onBack={() => setScreen('setup')} />;
+  }
+
   return (
     <SetupScreen
       onFolderSelected={handleFolderSelected}
+      onOpenSettings={() => setScreen('settings')}
     />
   );
 }

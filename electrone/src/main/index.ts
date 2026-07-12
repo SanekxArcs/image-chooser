@@ -37,8 +37,48 @@ interface SavedSession {
   pending: [string, string][]
 }
 
+interface ShortcutFolder {
+  key: string
+  folderPath: string
+}
+
+type ShortcutLayout = 'bottom' | 'left' | 'right'
+
+interface DisplaySettings {
+  truncateLength: number | null
+  layout: ShortcutLayout
+}
+
+const DEFAULT_DISPLAY_SETTINGS: DisplaySettings = { truncateLength: 10, layout: 'bottom' }
+
+let shortcuts: ShortcutFolder[] = []
+let displaySettings: DisplaySettings = { ...DEFAULT_DISPLAY_SETTINGS }
+
 function sessionFilePath(): string {
   return join(app.getPath('userData'), 'image-chooser-session.json')
+}
+
+function settingsFilePath(): string {
+  return join(app.getPath('userData'), 'image-chooser-settings.json')
+}
+
+function loadSettingsFile(): { shortcuts: ShortcutFolder[]; display: DisplaySettings } {
+  try {
+    const raw = readFileSync(settingsFilePath(), 'utf8')
+    const data = JSON.parse(raw) as { shortcuts?: ShortcutFolder[]; display?: Partial<DisplaySettings> }
+    return {
+      shortcuts: Array.isArray(data.shortcuts) ? data.shortcuts : [],
+      display: { ...DEFAULT_DISPLAY_SETTINGS, ...data.display },
+    }
+  } catch {
+    return { shortcuts: [], display: { ...DEFAULT_DISPLAY_SETTINGS } }
+  }
+}
+
+function saveSettingsFile(): void {
+  try {
+    writeFileSync(settingsFilePath(), JSON.stringify({ shortcuts, display: displaySettings }), 'utf8')
+  } catch { /* ignore */ }
 }
 
 function saveSession(): void {
@@ -62,16 +102,26 @@ function loadSavedSession(): SavedSession | null {
   }
 }
 
+function resolveDestDir(action: string): string | null {
+  if (!session.folder) return null
+  const subdirMap: Record<string, string> = { keep: '_keep', delete: '_delete', later: '_later' }
+  if (subdirMap[action]) return join(session.folder, subdirMap[action])
+  if (action.startsWith('shortcut:')) {
+    const key = action.slice('shortcut:'.length)
+    const match = shortcuts.find(s => s.key === key)
+    return match ? match.folderPath : null
+  }
+  return null
+}
+
 function applyAllPending(): void {
   if (!session.folder) return
-  const subdirMap: Record<string, string> = { keep: '_keep', delete: '_delete', later: '_later' }
   for (const [filename, action] of session.pending) {
-    const subdir = subdirMap[action]
-    if (!subdir) continue
+    const destDir = resolveDestDir(action)
+    if (!destDir) continue
     const src = join(session.folder, filename)
     if (!existsSync(src)) continue
-    const destDir = join(session.folder, subdir)
-    if (!existsSync(destDir)) mkdirSync(destDir)
+    if (!existsSync(destDir)) mkdirSync(destDir, { recursive: true })
     try { renameSync(src, join(destDir, filename)) } catch { /* file may still be locked, skip */ }
   }
   session.pending.clear()
@@ -107,6 +157,9 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
+  const loaded = loadSettingsFile()
+  shortcuts = loaded.shortcuts
+  displaySettings = loaded.display
   createWindow()
 
   app.on('activate', () => {
@@ -184,6 +237,23 @@ ipcMain.handle('action', (_event, action: string) => {
   // Queue the move instead of renaming immediately — avoids EBUSY on open video files
   session.pending.set(filename, action)
   session.history.push({ filename, action })
+  session.index++
+  const done = session.index >= session.images.length
+  saveSession()
+  return { done, index: session.index, total: session.images.length, canUndo: session.history.length > 0 }
+})
+
+ipcMain.handle('action-shortcut', (_event, key: string) => {
+  if (!session.folder || session.index >= session.images.length) {
+    throw new Error('No current image')
+  }
+  const normalizedKey = String(key ?? '').toLowerCase()
+  const match = shortcuts.find(s => s.key === normalizedKey)
+  if (!match) throw new Error('No folder assigned to that shortcut')
+  const filename = session.images[session.index]
+  const actionId = `shortcut:${normalizedKey}`
+  session.pending.set(filename, actionId)
+  session.history.push({ filename, action: actionId })
   session.index++
   const done = session.index >= session.images.length
   saveSession()
@@ -327,12 +397,45 @@ app.on('will-quit', () => {
   saveSession()
 })
 
-ipcMain.handle('open-folder-dialog', async (event) => {
+ipcMain.handle('open-folder-dialog', async (event, title?: string) => {
   const win = BrowserWindow.fromWebContents(event.sender)
   const result = await dialog.showOpenDialog(win!, {
     properties: ['openDirectory'],
-    title: 'Select Media Folder',
+    title: title || 'Select Media Folder',
   })
   if (result.canceled || result.filePaths.length === 0) return null
   return result.filePaths[0]
+})
+
+ipcMain.handle('get-shortcuts', () => shortcuts)
+
+ipcMain.handle('save-shortcuts', (_event, list: ShortcutFolder[]) => {
+  const seen = new Set<string>()
+  const clean: ShortcutFolder[] = []
+  for (const s of list ?? []) {
+    const key = String(s?.key ?? '').trim().toLowerCase()
+    const folderPath = String(s?.folderPath ?? '')
+    if (!/^[a-z0-9]$/.test(key)) continue
+    if (seen.has(key)) continue
+    if (!folderPath || !existsSync(folderPath)) continue
+    seen.add(key)
+    clean.push({ key, folderPath })
+  }
+  shortcuts = clean
+  saveSettingsFile()
+  return shortcuts
+})
+
+ipcMain.handle('get-display-settings', () => displaySettings)
+
+ipcMain.handle('save-display-settings', (_event, settings: Partial<DisplaySettings>) => {
+  const layout: ShortcutLayout =
+    settings?.layout === 'left' || settings?.layout === 'right' ? settings.layout : 'bottom'
+  const truncateLength =
+    typeof settings?.truncateLength === 'number' && settings.truncateLength > 0
+      ? Math.floor(settings.truncateLength)
+      : null
+  displaySettings = { truncateLength, layout }
+  saveSettingsFile()
+  return displaySettings
 })

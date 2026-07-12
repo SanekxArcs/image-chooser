@@ -43,7 +43,19 @@ export interface BackResponse {
   index: number;
   total: number;
   canUndo: boolean;
-  undoneAction?: Action;
+  undoneAction?: string;
+}
+
+export interface ShortcutFolder {
+  key: string;
+  folderPath: string;
+}
+
+export type ShortcutLayout = 'bottom' | 'left' | 'right';
+
+export interface DisplaySettings {
+  truncateLength: number | null;
+  layout: ShortcutLayout;
 }
 
 export interface SetFolderResponse {

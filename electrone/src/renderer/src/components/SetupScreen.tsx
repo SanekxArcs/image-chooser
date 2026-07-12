@@ -1,13 +1,14 @@
 import { useState } from "react";
-import { FolderOpen, Loader2 } from "lucide-react";
+import { FolderOpen, Loader2, Settings } from "lucide-react";
 import { apiSetFolder, apiOpenFolderDialog } from "../api";
 import type { Stats } from "../types";
 
 interface Props {
   onFolderSelected: (folder: string, stats: Stats, startDone: boolean) => void;
+  onOpenSettings: () => void;
 }
 
-export default function SetupScreen({ onFolderSelected }: Props) {
+export default function SetupScreen({ onFolderSelected, onOpenSettings }: Props) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -41,13 +42,30 @@ export default function SetupScreen({ onFolderSelected }: Props) {
       style={{ background: "var(--bg)" }}
     >
       <div
-        className="w-72 flex flex-col gap-6 p-8"
+        className="w-72 flex flex-col gap-6 p-8 relative"
         style={{
           background: "var(--surface)",
           border: "1px solid var(--border)",
           borderRadius: "var(--radius)",
         }}
       >
+        {/* Settings button */}
+        <button
+          type="button"
+          onClick={onOpenSettings}
+          title="Settings"
+          className="absolute flex items-center justify-center transition-colors"
+          style={{
+            top: "10px", right: "10px", width: "26px", height: "26px",
+            background: "none", border: "none", cursor: "pointer",
+            color: "var(--muted)", borderRadius: "var(--radius)",
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.color = "var(--text)"; }}
+          onMouseLeave={(e) => { e.currentTarget.style.color = "var(--muted)"; }}
+        >
+          <Settings size={15} strokeWidth={1.8} />
+        </button>
+
         {/* Header */}
         <div className="flex flex-col mx-auto gap-1">
           <h1
