@@ -89,10 +89,12 @@ From the setup screen, select **Settings** to assign a single letter or number t
 
 The original browser-based version is retained in this repository. It is useful for a lightweight local workflow, but the Electron app is the actively featured version and adds video support, native folder selection, custom folders, settings, and session persistence.
 
-Run the original static browser interface on port 3456:
+Build and run the supported React browser interface on port 3456:
 
 ```bash
 npm install
+npm install --prefix client
+npm run build
 npm run start
 ```
 
@@ -105,7 +107,7 @@ npm install --prefix client
 npm run dev
 ```
 
-Open the Vite address printed in the terminal (normally [http://localhost:5173](http://localhost:5173)). Its production build is not yet mounted ahead of the legacy `public/` interface by the Express server.
+Open the Vite address printed in the terminal (normally [http://localhost:5173](http://localhost:5173)). When no browser build exists, the Express server keeps the old static interface in `public/` as a fallback.
 
 ## Project layout
 

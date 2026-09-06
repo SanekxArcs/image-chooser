@@ -87,7 +87,12 @@ async function loadDrives() {
   for (const drive of data.drives) {
     const el = document.createElement('div');
     el.className = 'drive-item';
-    el.innerHTML = `<span class="drive-icon">&#128190;</span><span>${drive}</span>`;
+    const icon = document.createElement('span');
+    icon.className = 'drive-icon';
+    icon.textContent = '💾';
+    const label = document.createElement('span');
+    label.textContent = drive;
+    el.append(icon, label);
     el.addEventListener('click', () => browseFolder(drive));
     browserList.appendChild(el);
   }
@@ -102,7 +107,11 @@ async function browseFolder(dirPath) {
   const data = await res.json();
 
   if (!res.ok) {
-    browserList.innerHTML = `<div class="browser-empty">⚠ ${data.error}</div>`;
+    browserList.innerHTML = '';
+    const error = document.createElement('div');
+    error.className = 'browser-empty';
+    error.textContent = `⚠ ${data.error}`;
+    browserList.appendChild(error);
     return;
   }
 
@@ -131,10 +140,16 @@ async function browseFolder(dirPath) {
     const fullPath = `${data.path.replace(/[\\/]$/, '')}\\${dir}`;
     const el = document.createElement('div');
     el.className = 'folder-item';
-    el.innerHTML = `
-      <span class="folder-icon">&#128193;</span>
-      <span class="folder-name">${dir}</span>
-      <span class="folder-arrow">&#8250;</span>`;
+    const icon = document.createElement('span');
+    icon.className = 'folder-icon';
+    icon.textContent = '📁';
+    const name = document.createElement('span');
+    name.className = 'folder-name';
+    name.textContent = dir;
+    const arrow = document.createElement('span');
+    arrow.className = 'folder-arrow';
+    arrow.textContent = '›';
+    el.append(icon, name, arrow);
     el.addEventListener('click', () => browseFolder(fullPath));
     browserList.appendChild(el);
   }

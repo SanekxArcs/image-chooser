@@ -4,9 +4,13 @@ const path = require('node:path');
 
 const app = express();
 const PORT = 3456;
+const clientDist = path.join(__dirname, 'client', 'dist');
+const frontendDir = fs.existsSync(clientDist)
+  ? clientDist
+  : path.join(__dirname, 'public');
 
 app.use(express.json());
-app.use(express.static('public'));
+app.use(express.static(frontendDir));
 
 const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.tiff', '.tif', '.avif']);
 
@@ -19,8 +23,9 @@ const session = {
 };
 
 function getImages(folder) {
-  return fs.readdirSync(folder)
-    .filter(f => IMAGE_EXTENSIONS.has(path.extname(f).toLowerCase()))
+  return fs.readdirSync(folder, { withFileTypes: true })
+    .filter(entry => entry.isFile() && IMAGE_EXTENSIONS.has(path.extname(entry.name).toLowerCase()))
+    .map(entry => entry.name)
     .sort();
 }
 
@@ -80,11 +85,14 @@ app.post('/api/action', (req, res) => {
 
   const filename = session.images[session.index];
   const filepath = path.join(session.folder, filename);
+  const subdir = { keep: '_keep', delete: '_delete', later: '_later' }[action];
+  if (!subdir) {
+    return res.status(400).json({ error: 'Unknown action' });
+  }
 
   try {
-    const subdir = { keep: '_keep', delete: '_delete', later: '_later' }[action];
     const destDir = path.join(session.folder, subdir);
-    if (!fs.existsSync(destDir)) fs.mkdirSync(destDir);
+    if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
     fs.renameSync(filepath, path.join(destDir, filename));
 
     session.history.push({ filename, action });
@@ -189,7 +197,9 @@ app.post('/api/purge-deleted', (_req, res) => {
   const deleteDir = path.join(session.folder, '_delete');
   if (!fs.existsSync(deleteDir)) return res.json({ purged: 0 });
 
-  const files = fs.readdirSync(deleteDir);
+  const files = fs.readdirSync(deleteDir, { withFileTypes: true })
+    .filter(entry => entry.isFile() && IMAGE_EXTENSIONS.has(path.extname(entry.name).toLowerCase()))
+    .map(entry => entry.name);
   let purged = 0;
   for (const f of files) {
     try { fs.unlinkSync(path.join(deleteDir, f)); purged++; } catch (_) {}
@@ -226,13 +236,11 @@ app.get('/api/session', (_req, res) => {
   });
 });
 
-// Serve built frontend in production
-const clientDist = path.join(__dirname, 'client', 'dist');
+// Let client-side routing fall back to the built React app when it exists.
 if (fs.existsSync(clientDist)) {
-  app.use(express.static(clientDist));
   app.get('*', (_req, res) => res.sendFile(path.join(clientDist, 'index.html')));
 }
 
-app.listen(PORT, () => {
+app.listen(PORT, '127.0.0.1', () => {
   console.log(`Image Chooser running at http://localhost:${PORT}`);
 });
