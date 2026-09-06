@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, net, protocol } from 'electron'
 import { join, extname, dirname } from 'path'
 import {
   existsSync,
@@ -14,6 +14,18 @@ import {
   readFileSync,
 } from 'fs'
 import { pathToFileURL } from 'url'
+
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'image-chooser-media',
+    privileges: {
+      standard: true,
+      secure: true,
+      corsEnabled: true,
+      supportFetchAPI: true,
+    },
+  },
+])
 
 const IMAGE_EXTENSIONS = new Set([
   '.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.tiff', '.tif', '.avif',
@@ -193,10 +205,16 @@ function createWindow(): void {
     title: 'Image Chooser',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
-      sandbox: false,
-      webSecurity: false,
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
+      webviewTag: false,
     },
   })
+
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  win.webContents.on('will-navigate', event => event.preventDefault())
 
   if (process.env['ELECTRON_RENDERER_URL']) {
     win.loadURL(process.env['ELECTRON_RENDERER_URL'])
@@ -206,6 +224,19 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
+  protocol.handle('image-chooser-media', request => {
+    try {
+      const offset = Number(new URL(request.url).searchParams.get('offset') ?? '0')
+      const index = session.index + offset
+      if (!Number.isInteger(offset) || !session.folder || index < 0 || index >= session.images.length) {
+        return new Response(null, { status: 404 })
+      }
+      return net.fetch(pathToFileURL(join(session.folder, session.images[index])).toString())
+    } catch {
+      return new Response(null, { status: 404 })
+    }
+  })
+
   const loaded = loadSettingsFile()
   shortcuts = loaded.shortcuts
   displaySettings = loaded.display
@@ -271,9 +302,8 @@ ipcMain.handle('get-image-path', (_event, offset: number) => {
   const idx = session.index + offset
   if (!session.folder || idx < 0 || idx >= session.images.length) return null
   const filename = session.images[idx]
-  const filepath = join(session.folder, filename)
   const isVideo = VIDEO_EXTENSIONS.has(extname(filename).toLowerCase())
-  return { url: pathToFileURL(filepath).toString(), isVideo }
+  return { url: `image-chooser-media://media?offset=${offset}`, isVideo }
 })
 
 ipcMain.handle('action', (_event, action: string) => {
