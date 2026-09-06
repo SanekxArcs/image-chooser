@@ -15,8 +15,7 @@ import type {
   ShortcutFolder,
 } from './types';
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const eAPI = (window as any).electronAPI;
+const eAPI = window.electronAPI;
 
 export async function apiSetFolder(folder: string): Promise<SetFolderResponse> {
   return eAPI.setFolder(folder);

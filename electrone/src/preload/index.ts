@@ -3,7 +3,10 @@ import { contextBridge, ipcRenderer } from 'electron'
 contextBridge.exposeInMainWorld('electronAPI', {
   setFolder: (folder: string) => ipcRenderer.invoke('set-folder', folder),
   getCurrent: () => ipcRenderer.invoke('get-current'),
-  getImagePath: (offset: number) => ipcRenderer.invoke('get-image-path', offset) as Promise<string | null>,
+  getImagePath: (offset: number) => ipcRenderer.invoke('get-image-path', offset) as Promise<{
+    url: string
+    isVideo: boolean
+  } | null>,
   action: (type: string) => ipcRenderer.invoke('action', type),
   actionShortcut: (key: string) => ipcRenderer.invoke('action-shortcut', key),
   skip: () => ipcRenderer.invoke('skip'),
