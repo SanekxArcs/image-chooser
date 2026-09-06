@@ -7,7 +7,8 @@
     "start": "node server.js",
     "dev": "concurrently \"node server.js\" \"npm run dev --prefix client\"",
     "build": "npm run build --prefix client",
-    "preview": "node server.js"
+    "preview": "node server.js",
+    "test": "node --test test/server.test.js"
   },
   "dependencies": {
     "express": "^4.18.2"

@@ -1,0 +1,55 @@
+const assert = require('node:assert/strict');
+const { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } = require('node:fs');
+const { tmpdir } = require('node:os');
+const { join } = require('node:path');
+const test = require('node:test');
+
+const { app } = require('../server');
+
+async function request(baseUrl, path, options) {
+  const response = await fetch(`${baseUrl}${path}`, options);
+  const body = await response.json();
+  return { response, body };
+}
+
+test('moves selected media and only purges media staged for deletion', async t => {
+  const folder = mkdtempSync(join(tmpdir(), 'image-chooser-'));
+  writeFileSync(join(folder, 'keep.jpg'), 'image');
+  writeFileSync(join(folder, 'notes.txt'), 'keep this note');
+
+  const server = app.listen(0, '127.0.0.1');
+  t.after(() => {
+    server.close();
+    rmSync(folder, { recursive: true, force: true });
+  });
+  await new Promise(resolve => server.once('listening', resolve));
+  const address = server.address();
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+
+  const setFolder = await request(baseUrl, '/api/set-folder', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ folder }),
+  });
+  assert.equal(setFolder.response.status, 200);
+  assert.equal(setFolder.body.total, 1);
+
+  const action = await request(baseUrl, '/api/action', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'delete' }),
+  });
+  assert.equal(action.response.status, 200);
+  assert.equal(existsSync(join(folder, 'keep.jpg')), false);
+  assert.equal(existsSync(join(folder, '_delete', 'keep.jpg')), true);
+
+  writeFileSync(join(folder, '_delete', 'notes.txt'), 'do not purge');
+  mkdirSync(join(folder, '_delete', 'nested'));
+
+  const purge = await request(baseUrl, '/api/purge-deleted', { method: 'POST' });
+  assert.equal(purge.response.status, 200);
+  assert.equal(purge.body.purged, 1);
+  assert.equal(existsSync(join(folder, '_delete', 'keep.jpg')), false);
+  assert.equal(existsSync(join(folder, '_delete', 'notes.txt')), true);
+  assert.equal(existsSync(join(folder, '_delete', 'nested')), true);
+});

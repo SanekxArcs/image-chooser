@@ -241,6 +241,10 @@ if (fs.existsSync(clientDist)) {
   app.get('*', (_req, res) => res.sendFile(path.join(clientDist, 'index.html')));
 }
 
-app.listen(PORT, '127.0.0.1', () => {
-  console.log(`Image Chooser running at http://localhost:${PORT}`);
-});
+if (require.main === module) {
+  app.listen(PORT, '127.0.0.1', () => {
+    console.log(`Image Chooser running at http://localhost:${PORT}`);
+  });
+}
+
+module.exports = { app };
