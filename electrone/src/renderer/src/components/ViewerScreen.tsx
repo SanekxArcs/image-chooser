@@ -76,6 +76,7 @@ export default function ViewerScreen({ initialStats, startDone, onChooseAnother 
   const [isMuted, setIsMuted] = useState(true);
   const [isApplying, setIsApplying] = useState(false);
   const [applyError, setApplyError] = useState('');
+  const [actionError, setActionError] = useState('');
   const [shortcuts, setShortcuts] = useState<ShortcutFolder[]>([]);
   const [display, setDisplay] = useState<DisplaySettings>({ truncateLength: 10, layout: 'bottom' });
 
@@ -122,7 +123,9 @@ export default function ViewerScreen({ initialStats, startDone, onChooseAnother 
 
   useEffect(() => {
     if (startDone) return;
-    void fetchNextState().then(state => setImgState(state));
+    void fetchNextState()
+      .then(state => setImgState(state))
+      .catch(() => setActionError('Could not load the current media item. Try choosing the folder again.'));
   }, [startDone]);
 
   // Apply all queued file moves when processing is done
@@ -165,24 +168,32 @@ export default function ViewerScreen({ initialStats, startDone, onChooseAnother 
   const doAction = useCallback((action: Action) => {
     if (busyRef.current) return;
     busyRef.current = true;
+    setActionError('');
     const labelMap = { keep: labelKeepRef, delete: labelDeleteRef, later: labelLaterRef };
     const labelEl = labelMap[action].current;
     if (labelEl) labelEl.style.opacity = '1';
-    setStats(prev => ({
-      kept:    action === 'keep'   ? prev.kept + 1    : prev.kept,
-      deleted: action === 'delete' ? prev.deleted + 1 : prev.deleted,
-      later:   action === 'later'  ? prev.later + 1   : prev.later,
-    }));
     void (async () => {
-      await apiAction(action);
-      await withTransition(EXIT_DIR[action], fetchNextState);
-      busyRef.current = false;
+      try {
+        await apiAction(action);
+        setStats(prev => ({
+          kept:    action === 'keep'   ? prev.kept + 1    : prev.kept,
+          deleted: action === 'delete' ? prev.deleted + 1 : prev.deleted,
+          later:   action === 'later'  ? prev.later + 1   : prev.later,
+        }));
+        await withTransition(EXIT_DIR[action], fetchNextState);
+      } catch {
+        resetLabels();
+        setActionError('Could not move this file. Check that the destination is available and try again.');
+      } finally {
+        busyRef.current = false;
+      }
     })();
-  }, [withTransition]);
+  }, [resetLabels, withTransition]);
 
   const doShortcutAction = useCallback((key: string, folderPath: string) => {
     if (busyRef.current) return;
     busyRef.current = true;
+    setActionError('');
     const labelEl = labelShortcutRef.current;
     if (labelEl) {
       const name = folderPath.split(/[/\\]/).filter(Boolean).pop() ?? folderPath;
@@ -190,36 +201,54 @@ export default function ViewerScreen({ initialStats, startDone, onChooseAnother 
       labelEl.style.opacity = '1';
     }
     void (async () => {
-      await apiActionShortcut(key);
-      await withTransition('skip', fetchNextState);
-      busyRef.current = false;
+      try {
+        await apiActionShortcut(key);
+        await withTransition('skip', fetchNextState);
+      } catch {
+        resetLabels();
+        setActionError('Could not move this file to the shortcut folder. Check the folder and try again.');
+      } finally {
+        busyRef.current = false;
+      }
     })();
-  }, [withTransition]);
+  }, [resetLabels, withTransition]);
 
   const doSkip = useCallback(() => {
     if (busyRef.current) return;
     busyRef.current = true;
+    setActionError('');
     void (async () => {
-      await apiSkip();
-      await withTransition('skip', fetchNextState);
-      busyRef.current = false;
+      try {
+        await apiSkip();
+        await withTransition('skip', fetchNextState);
+      } catch {
+        setActionError('Could not skip this file. Try again.');
+      } finally {
+        busyRef.current = false;
+      }
     })();
   }, [withTransition]);
 
   const doBack = useCallback(() => {
     if (busyRef.current) return;
     busyRef.current = true;
+    setActionError('');
     void (async () => {
-      const data = await apiBack();
-      if (data.undoneAction) {
-        setStats(prev => ({
-          kept:    data.undoneAction === 'keep'   ? Math.max(0, prev.kept - 1)    : prev.kept,
-          deleted: data.undoneAction === 'delete' ? Math.max(0, prev.deleted - 1) : prev.deleted,
-          later:   data.undoneAction === 'later'  ? Math.max(0, prev.later - 1)   : prev.later,
-        }));
+      try {
+        const data = await apiBack();
+        if (data.undoneAction) {
+          setStats(prev => ({
+            kept:    data.undoneAction === 'keep'   ? Math.max(0, prev.kept - 1)    : prev.kept,
+            deleted: data.undoneAction === 'delete' ? Math.max(0, prev.deleted - 1) : prev.deleted,
+            later:   data.undoneAction === 'later'  ? Math.max(0, prev.later - 1)   : prev.later,
+          }));
+        }
+        await withTransition('undo', fetchNextState);
+      } catch {
+        setActionError('Could not undo the last action. Try again.');
+      } finally {
+        busyRef.current = false;
       }
-      await withTransition('undo', fetchNextState);
-      busyRef.current = false;
     })();
   }, [withTransition]);
 
@@ -427,13 +456,13 @@ export default function ViewerScreen({ initialStats, startDone, onChooseAnother 
         <ShortcutBar shortcuts={shortcuts} display={display} />
       )}
 
-      {applyError && (
+      {(applyError || actionError) && (
         <p
           role="alert"
           className="flex-shrink-0 px-3 pb-2 text-center text-xs"
           style={{ color: 'var(--delete)' }}
         >
-          {applyError}
+          {actionError || applyError}
         </p>
       )}
     </div>
