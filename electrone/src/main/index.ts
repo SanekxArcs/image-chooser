@@ -5,6 +5,8 @@ import {
   readdirSync,
   mkdirSync,
   renameSync,
+  copyFileSync,
+  constants as fsConstants,
   unlinkSync,
   rmdirSync,
   accessSync,
@@ -47,6 +49,12 @@ type ShortcutLayout = 'bottom' | 'left' | 'right'
 interface DisplaySettings {
   truncateLength: number | null
   layout: ShortcutLayout
+}
+
+interface ApplyFailure {
+  filename: string
+  action: string
+  error: string
 }
 
 const DEFAULT_DISPLAY_SETTINGS: DisplaySettings = { truncateLength: 10, layout: 'bottom' }
@@ -114,23 +122,64 @@ function resolveDestDir(action: string): string | null {
   return null
 }
 
-function applyAllPending(): void {
-  if (!session.folder) return
-  for (const [filename, action] of session.pending) {
-    const destDir = resolveDestDir(action)
-    if (!destDir) continue
-    const src = join(session.folder, filename)
-    if (!existsSync(src)) continue
-    if (!existsSync(destDir)) mkdirSync(destDir, { recursive: true })
-    try { renameSync(src, join(destDir, filename)) } catch { /* file may still be locked, skip */ }
+function moveFile(source: string, destination: string): void {
+  if (existsSync(destination)) {
+    throw new Error('A file with the same name already exists in the destination folder')
   }
+
+  try {
+    renameSync(source, destination)
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code !== 'EXDEV') throw error
+
+    // Renaming between drives is not supported by the operating system. Copy
+    // without overwriting first, then remove the source only after a full copy.
+    copyFileSync(source, destination, fsConstants.COPYFILE_EXCL)
+    try {
+      unlinkSync(source)
+    } catch (unlinkError) {
+      // Keep the original if cleanup fails; remove our copy so the user can
+      // retry without ending up with an unreported duplicate.
+      try { unlinkSync(destination) } catch { /* best effort cleanup */ }
+      throw unlinkError
+    }
+  }
+}
+
+function applyAllPending(): ApplyFailure[] {
+  if (!session.folder) return []
+  const failures: ApplyFailure[] = []
+  for (const [filename, action] of session.pending) {
+    try {
+      const destDir = resolveDestDir(action)
+      if (!destDir) throw new Error('The destination folder is no longer available')
+      const src = join(session.folder, filename)
+      if (!existsSync(src)) throw new Error('The source file is no longer available')
+      if (!existsSync(destDir)) mkdirSync(destDir, { recursive: true })
+      moveFile(src, join(destDir, filename))
+    } catch (error: unknown) {
+      failures.push({
+        filename,
+        action,
+        error: error instanceof Error ? error.message : 'Unknown file operation error',
+      })
+    }
+  }
+
+  // A commit changes the folder contents. Rebuilding the queue from the files
+  // still in the source folder prevents a stale index from skipping media after
+  // an app restart or after choosing the folder again.
+  session.images = getMedia(session.folder)
+  session.index = 0
   session.pending.clear()
   session.history = []
+  return failures
 }
 
 function getMedia(folder: string): string[] {
-  return readdirSync(folder)
-    .filter(f => MEDIA_EXTENSIONS.has(extname(f).toLowerCase()))
+  return readdirSync(folder, { withFileTypes: true })
+    .filter(entry => entry.isFile() && MEDIA_EXTENSIONS.has(extname(entry.name).toLowerCase()))
+    .map(entry => entry.name)
     .sort()
 }
 
@@ -368,9 +417,11 @@ ipcMain.handle('get-delete-count', () => {
 ipcMain.handle('purge-deleted', () => {
   if (!session.folder) throw new Error('No folder')
   // Flush pending deletes to disk first
-  applyAllPending()
+  const failures = applyAllPending()
+  if (failures.length > 0) {
+    throw new Error(`Could not apply ${failures.length} pending file move(s). Review the folder and try again.`)
+  }
   saveSession()
-  if (session.folder) session.images = getMedia(session.folder)
   const deleteDir = join(session.folder, '_delete')
   if (!existsSync(deleteDir)) return { purged: 0 }
   const files = readdirSync(deleteDir)
@@ -383,12 +434,9 @@ ipcMain.handle('purge-deleted', () => {
 })
 
 ipcMain.handle('apply-pending', () => {
-  applyAllPending()
-  if (session.folder && existsSync(session.folder)) {
-    session.images = getMedia(session.folder)
-  }
+  const failures = applyAllPending()
   saveSession()
-  return { applied: true }
+  return { applied: failures.length === 0, failures }
 })
 
 // Apply any remaining pending moves when the app is closing

@@ -66,6 +66,11 @@ export interface SetFolderResponse {
 
 export interface ApplyPendingResponse {
   applied: boolean;
+  failures: Array<{
+    filename: string;
+    action: string;
+    error: string;
+  }>;
 }
 
 export interface DrivesResponse {

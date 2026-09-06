@@ -75,6 +75,7 @@ export default function ViewerScreen({ initialStats, startDone, onChooseAnother 
   });
   const [isMuted, setIsMuted] = useState(true);
   const [isApplying, setIsApplying] = useState(false);
+  const [applyError, setApplyError] = useState('');
   const [shortcuts, setShortcuts] = useState<ShortcutFolder[]>([]);
   const [display, setDisplay] = useState<DisplaySettings>({ truncateLength: 10, layout: 'bottom' });
 
@@ -128,17 +129,30 @@ export default function ViewerScreen({ initialStats, startDone, onChooseAnother 
   useEffect(() => {
     if (!imgState.done) return;
     setIsApplying(true);
-    void apiApplyPending().finally(() => setIsApplying(false));
+    void apiApplyPending()
+      .then(result => {
+        if (!result.applied) {
+          setApplyError(`Some files could not be moved. ${result.failures[0]?.error ?? 'Review the folder and try again.'}`);
+        }
+      })
+      .catch(() => setApplyError('Could not apply file changes. Review the folder and try again.'))
+      .finally(() => setIsApplying(false));
   }, [imgState.done]);
 
   // Wrap onChooseAnother to flush pending moves first
   const handleChooseAnother = useCallback(() => {
     if (busyRef.current) return;
     setIsApplying(true);
-    void apiApplyPending().finally(() => {
-      setIsApplying(false);
-      onChooseAnother();
-    });
+    void apiApplyPending()
+      .then(result => {
+        if (result.applied) {
+          onChooseAnother();
+        } else {
+          setApplyError(`Some files could not be moved. ${result.failures[0]?.error ?? 'Review the folder and try again.'}`);
+        }
+      })
+      .catch(() => setApplyError('Could not apply file changes. Review the folder and try again.'))
+      .finally(() => setIsApplying(false));
   }, [onChooseAnother]);
 
   const flash = useCallback((btn: HTMLButtonElement | null) => {
@@ -411,6 +425,16 @@ export default function ViewerScreen({ initialStats, startDone, onChooseAnother 
       {/* ── Shortcut legend (bottom layout) ── */}
       {!done && display.layout === 'bottom' && (
         <ShortcutBar shortcuts={shortcuts} display={display} />
+      )}
+
+      {applyError && (
+        <p
+          role="alert"
+          className="flex-shrink-0 px-3 pb-2 text-center text-xs"
+          style={{ color: 'var(--delete)' }}
+        >
+          {applyError}
+        </p>
       )}
     </div>
   );
