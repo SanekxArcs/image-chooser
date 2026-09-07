@@ -148,7 +148,7 @@ export default function SettingsScreen({ onBack }: Props) {
         {loading ? (
           <p className="text-xs" style={{ color: "var(--muted)" }}>Loading…</p>
         ) : (
-          <div className="flex flex-col gap-2">
+          <div className="flex flex-col gap-2 overflow-y-auto" style={{ maxHeight: "40vh" }}>
             {rows.length === 0 && (
               <p className="text-xs" style={{ color: "var(--muted)" }}>No shortcuts yet.</p>
             )}
