@@ -4,7 +4,7 @@ const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 const test = require('node:test');
 
-const { app } = require('../server');
+const { app, setServerToken } = require('../server');
 
 async function request(baseUrl, path, options) {
   const response = await fetch(`${baseUrl}${path}`, options);
@@ -73,3 +73,37 @@ test('moves selected media and only purges media staged for deletion', async t =
   assert.equal(existsSync(join(folder, 'collision.jpg')), true);
   assert.equal(existsSync(join(folder, '_keep', 'collision.jpg')), true);
 });
+
+test('rejects unauthorized requests when access token is configured', async t => {
+  const secret = 'secret-test-token-123';
+  setServerToken(secret);
+  const server = app.listen(0, '127.0.0.1');
+  t.after(() => {
+    setServerToken(null);
+    server.close();
+  });
+  await new Promise(resolve => server.once('listening', resolve));
+  const address = server.address();
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+
+  // Unauthorized request rejected with 401
+  const unauthed = await request(baseUrl, '/api/session');
+  assert.equal(unauthed.response.status, 401);
+
+  // Authorized request with x-access-token header succeeds
+  const authedHeader = await request(baseUrl, '/api/session', {
+    headers: { 'x-access-token': secret },
+  });
+  assert.equal(authedHeader.response.status, 200);
+
+  // Authorized request with token query parameter succeeds
+  const authedQuery = await request(baseUrl, `/api/session?token=${secret}`);
+  assert.equal(authedQuery.response.status, 200);
+
+  // Authorized request with cookie succeeds
+  const authedCookie = await request(baseUrl, '/api/session', {
+    headers: { cookie: `image_chooser_token=${secret}` },
+  });
+  assert.equal(authedCookie.response.status, 200);
+});
+

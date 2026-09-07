@@ -9,7 +9,48 @@ const frontendDir = fs.existsSync(clientDist)
   ? clientDist
   : path.join(__dirname, 'public');
 
+let serverToken = process.env.IMAGE_CHOOSER_TOKEN || null;
+
+function setServerToken(token) {
+  serverToken = token;
+}
+
+function getCookie(req, name) {
+  const cookieHeader = req.headers.cookie;
+  if (!cookieHeader) return null;
+  const match = cookieHeader.split(';').map(c => c.trim()).find(c => c.startsWith(`${name}=`));
+  return match ? decodeURIComponent(match.slice(name.length + 1)) : null;
+}
+
+app.use((req, res, next) => {
+  if (serverToken && req.query && req.query.token === serverToken) {
+    res.setHeader('Set-Cookie', `image_chooser_token=${serverToken}; Path=/; SameSite=Strict; HttpOnly`);
+  }
+  next();
+});
+
 app.use(express.json());
+
+function authMiddleware(req, res, next) {
+  if (!serverToken) return next();
+
+  if (req.query && req.query.token === serverToken) return next();
+
+  const headerToken = req.headers['x-access-token'] ||
+    (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')
+      ? req.headers.authorization.slice(7).trim()
+      : null);
+  if (headerToken === serverToken) return next();
+
+  const cookieToken = getCookie(req, 'image_chooser_token');
+  if (cookieToken === serverToken) return next();
+
+  if (!req.path.startsWith('/api/')) return next();
+
+  return res.status(401).json({ error: 'Unauthorized: invalid or missing access token' });
+}
+
+app.use(authMiddleware);
 app.use(express.static(frontendDir));
 
 const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.tiff', '.tif', '.avif']);
@@ -263,9 +304,12 @@ if (fs.existsSync(clientDist)) {
 }
 
 if (require.main === module) {
+  const crypto = require('node:crypto');
+  const token = process.env.IMAGE_CHOOSER_TOKEN || crypto.randomBytes(16).toString('hex');
+  setServerToken(token);
   app.listen(PORT, '127.0.0.1', () => {
-    console.log(`Image Chooser running at http://localhost:${PORT}`);
+    console.log(`Image Chooser running at http://127.0.0.1:${PORT}/?token=${token}`);
   });
 }
 
-module.exports = { app };
+module.exports = { app, setServerToken };
