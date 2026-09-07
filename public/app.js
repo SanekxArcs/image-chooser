@@ -73,9 +73,25 @@ function closeBrowser() {
   browserOverlay.classList.add('hidden');
 }
 
+function showLoading(container, text) {
+  container.replaceChildren();
+  const div = document.createElement('div');
+  div.className = 'browser-loading';
+  div.textContent = text;
+  container.appendChild(div);
+}
+
+function showEmpty(container, text) {
+  container.replaceChildren();
+  const div = document.createElement('div');
+  div.className = 'browser-empty';
+  div.textContent = text;
+  container.appendChild(div);
+}
+
 async function loadDrives() {
-  browserCrumb.innerHTML = '';
-  browserList.innerHTML = '<div class="browser-loading">Loading drives…</div>';
+  browserCrumb.replaceChildren();
+  showLoading(browserList, 'Loading drives…');
   browserSelect.disabled = true;
   browserImgCount.textContent = '';
   browserCurrentPath = null;
@@ -83,7 +99,7 @@ async function loadDrives() {
   const res  = await fetch('/api/drives');
   const data = await res.json();
 
-  browserList.innerHTML = '';
+  browserList.replaceChildren();
   for (const drive of data.drives) {
     const el = document.createElement('div');
     el.className = 'drive-item';
@@ -99,7 +115,7 @@ async function loadDrives() {
 }
 
 async function browseFolder(dirPath) {
-  browserList.innerHTML = '<div class="browser-loading">Loading…</div>';
+  showLoading(browserList, 'Loading…');
   browserSelect.disabled = true;
   browserImgCount.textContent = '';
 
@@ -107,11 +123,7 @@ async function browseFolder(dirPath) {
   const data = await res.json();
 
   if (!res.ok) {
-    browserList.innerHTML = '';
-    const error = document.createElement('div');
-    error.className = 'browser-empty';
-    error.textContent = `⚠ ${data.error}`;
-    browserList.appendChild(error);
+    showEmpty(browserList, `⚠ ${data.error}`);
     return;
   }
 
@@ -130,9 +142,9 @@ async function browseFolder(dirPath) {
   }
 
   // Folder list
-  browserList.innerHTML = '';
+  browserList.replaceChildren();
   if (data.dirs.length === 0) {
-    browserList.innerHTML = '<div class="browser-empty">No subfolders</div>';
+    showEmpty(browserList, 'No subfolders');
     return;
   }
 
@@ -156,7 +168,7 @@ async function browseFolder(dirPath) {
 }
 
 function buildBreadcrumb(dirPath) {
-  browserCrumb.innerHTML = '';
+  browserCrumb.replaceChildren();
 
   // "Drives" root link
   const rootBtn = document.createElement('button');
