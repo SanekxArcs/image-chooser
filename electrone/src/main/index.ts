@@ -188,7 +188,7 @@ function moveFile(source: string, destination: string): void {
 function applyAllPending(): ApplyFailure[] {
   if (!session.folder) return []
   const failures: ApplyFailure[] = []
-  for (const [filename, action] of session.pending) {
+  for (const [filename, action] of [...session.pending.entries()]) {
     try {
       const destDir = resolveDestDir(action)
       if (!destDir) throw new Error('The destination folder is no longer available')
@@ -196,6 +196,7 @@ function applyAllPending(): ApplyFailure[] {
       if (!existsSync(src)) throw new Error('The source file is no longer available')
       if (!existsSync(destDir)) mkdirSync(destDir, { recursive: true })
       moveFile(src, join(destDir, filename))
+      session.pending.delete(filename)
     } catch (error: unknown) {
       failures.push({
         filename,
@@ -210,8 +211,7 @@ function applyAllPending(): ApplyFailure[] {
   // an app restart or after choosing the folder again.
   session.images = getMedia(session.folder)
   session.index = 0
-  session.pending.clear()
-  session.history = []
+  session.history = session.history.filter(h => session.pending.has(h.filename))
   return failures
 }
 

@@ -52,4 +52,24 @@ test('moves selected media and only purges media staged for deletion', async t =
   assert.equal(existsSync(join(folder, '_delete', 'keep.jpg')), false);
   assert.equal(existsSync(join(folder, '_delete', 'notes.txt')), true);
   assert.equal(existsSync(join(folder, '_delete', 'nested')), true);
+
+  writeFileSync(join(folder, 'collision.jpg'), 'source image');
+  mkdirSync(join(folder, '_keep'), { recursive: true });
+  writeFileSync(join(folder, '_keep', 'collision.jpg'), 'destination image');
+
+  const restart = await request(baseUrl, '/api/set-folder', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ folder }),
+  });
+  assert.equal(restart.response.status, 200);
+
+  const collision = await request(baseUrl, '/api/action', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'keep' }),
+  });
+  assert.equal(collision.response.status, 409);
+  assert.equal(existsSync(join(folder, 'collision.jpg')), true);
+  assert.equal(existsSync(join(folder, '_keep', 'collision.jpg')), true);
 });

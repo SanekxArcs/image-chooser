@@ -29,6 +29,26 @@ function getImages(folder) {
     .sort();
 }
 
+function moveFile(source, destination) {
+  if (fs.existsSync(destination)) {
+    const error = new Error('A file with the same name already exists in the destination folder');
+    error.statusCode = 409;
+    throw error;
+  }
+  try {
+    fs.renameSync(source, destination);
+  } catch (error) {
+    if (error.code !== 'EXDEV') throw error;
+    fs.copyFileSync(source, destination, fs.constants.COPYFILE_EXCL);
+    try {
+      fs.unlinkSync(source);
+    } catch (unlinkError) {
+      try { fs.unlinkSync(destination); } catch (_) {}
+      throw unlinkError;
+    }
+  }
+}
+
 // Set folder
 app.post('/api/set-folder', (req, res) => {
   const { folder } = req.body;
@@ -93,7 +113,8 @@ app.post('/api/action', (req, res) => {
   try {
     const destDir = path.join(session.folder, subdir);
     if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
-    fs.renameSync(filepath, path.join(destDir, filename));
+    const destination = path.join(destDir, filename);
+    moveFile(filepath, destination);
 
     session.history.push({ filename, action });
 
@@ -109,7 +130,7 @@ app.post('/api/action', (req, res) => {
       canUndo: session.history.length > 0,
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(err.statusCode || 500).json({ error: err.message });
   }
 });
 
