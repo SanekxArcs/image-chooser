@@ -298,10 +298,15 @@ app.get('/api/session', (_req, res) => {
   });
 });
 
-// Let client-side routing fall back to the built React app when it exists.
-if (fs.existsSync(clientDist)) {
-  app.get('*', (_req, res) => res.sendFile(path.join(clientDist, 'index.html')));
-}
+// Let client-side routing fall back to frontend index.html for SPA routes
+app.get('*', (req, res, next) => {
+  if (req.path.startsWith('/api/')) return next();
+  const indexHtml = path.join(frontendDir, 'index.html');
+  if (fs.existsSync(indexHtml)) {
+    return res.sendFile(indexHtml);
+  }
+  next();
+});
 
 if (require.main === module) {
   const crypto = require('node:crypto');
