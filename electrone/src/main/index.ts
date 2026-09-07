@@ -1,5 +1,5 @@
 import { app, BrowserWindow, ipcMain, dialog, net, protocol } from 'electron'
-import { join, extname, dirname } from 'path'
+import { join, extname, dirname, basename } from 'path'
 import {
   existsSync,
   readdirSync,
@@ -254,12 +254,14 @@ function createWindow(): void {
 app.whenReady().then(() => {
   protocol.handle('image-chooser-media', request => {
     try {
-      const offset = Number(new URL(request.url).searchParams.get('offset') ?? '0')
-      const index = session.index + offset
-      if (!Number.isInteger(offset) || !session.folder || index < 0 || index >= session.images.length) {
+      const name = new URL(request.url).searchParams.get('name')
+      // Reject anything that is not a plain filename inside the session folder
+      if (!session.folder || !name || name !== basename(name) || name === '.' || name === '..') {
         return new Response(null, { status: 404 })
       }
-      return net.fetch(pathToFileURL(join(session.folder, session.images[index])).toString())
+      const filepath = join(session.folder, name)
+      if (!existsSync(filepath)) return new Response(null, { status: 404 })
+      return net.fetch(pathToFileURL(filepath).toString())
     } catch {
       return new Response(null, { status: 404 })
     }
@@ -334,7 +336,9 @@ ipcMain.handle('get-image-path', (_event, offset: number) => {
   if (!session.folder || idx < 0 || idx >= session.images.length) return null
   const filename = session.images[idx]
   const isVideo = VIDEO_EXTENSIONS.has(extname(filename).toLowerCase())
-  return { url: `image-chooser-media://media?offset=${offset}`, isVideo }
+  // The filename is part of the URL so each item gets a distinct resource —
+  // a fixed URL would make the renderer reuse the first image from cache forever.
+  return { url: `image-chooser-media://media/?name=${encodeURIComponent(filename)}`, isVideo }
 })
 
 ipcMain.handle('action', (_event, action: string) => {

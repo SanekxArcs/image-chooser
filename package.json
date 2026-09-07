@@ -9,7 +9,8 @@
     "build": "npm run build --prefix client",
     "preview": "node server.js",
     "typecheck": "npm run typecheck --prefix electrone && npm run build --prefix client",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "dist": "cd .\\electrone\\ && npm run build && electron-builder --win"
   },
   "dependencies": {
     "express": "^4.18.2"
