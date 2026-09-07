@@ -5,4 +5,4 @@ electrone/dist-electron
 electrone/node_modules
 electrone/out
 dist
-
+*.tsbuildinfo

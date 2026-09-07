@@ -47,14 +47,14 @@ const CardStack = forwardRef<HTMLDivElement, Props>(function CardStack(
       >
         {main.isVideo ? (
           <video
-            src={main.url}
+            src={main.url ?? undefined}
             autoPlay loop muted playsInline draggable={false}
             className="block w-full object-contain"
             style={{ maxHeight: 'calc(100vh - 520px)', height: 'auto', viewTransitionName: 'main-card' }}
           />
         ) : (
           <img
-            src={main.url}
+            src={main.url ?? undefined}
             alt="" draggable={false}
             className="block w-full object-contain"
             style={{ maxHeight: 'calc(100vh - 520px)', height: 'auto', viewTransitionName: 'main-card' }}
@@ -88,12 +88,12 @@ const CardStack = forwardRef<HTMLDivElement, Props>(function CardStack(
           }}
         >
           {peek1.isVideo ? (
-            <video src={peek1.url} muted playsInline draggable={false} style={{
+            <video src={peek1.url ?? undefined} muted playsInline draggable={false} style={{
               display: 'block', width: 'auto', height: 'auto',
               maxWidth: 'min(600px, calc(100vw - 40px))', maxHeight: '100px', objectFit: 'contain',
             }} />
           ) : (
-            <img src={peek1.url} alt="" draggable={false} style={{
+            <img src={peek1.url ?? undefined} alt="" draggable={false} style={{
               display: 'block', width: 'auto', height: 'auto',
               maxWidth: 'min(600px, calc(100vw - 40px))', maxHeight: '100px', objectFit: 'contain',
             }} />
