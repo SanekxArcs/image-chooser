@@ -12,6 +12,7 @@ import {
   apiGetDisplaySettings,
   apiGetMediaPath,
   apiGetShortcuts,
+  apiSession,
   apiSkip,
 } from '../api';
 import { folderBaseName, truncateName } from '../utils';
@@ -145,7 +146,9 @@ export default function ViewerScreen({ initialStats, startDone, onChooseAnother 
   // Wrap onChooseAnother to flush pending moves first
   const handleChooseAnother = useCallback(() => {
     if (busyRef.current) return;
+    busyRef.current = true;
     setIsApplying(true);
+    setApplyError('');
     void apiApplyPending()
       .then(result => {
         if (result.applied) {
@@ -155,7 +158,10 @@ export default function ViewerScreen({ initialStats, startDone, onChooseAnother 
         }
       })
       .catch(() => setApplyError('Could not apply file changes. Review the folder and try again.'))
-      .finally(() => setIsApplying(false));
+      .finally(() => {
+        setIsApplying(false);
+        busyRef.current = false;
+      });
   }, [onChooseAnother]);
 
   const flash = useCallback((btn: HTMLButtonElement | null) => {
@@ -184,6 +190,9 @@ export default function ViewerScreen({ initialStats, startDone, onChooseAnother 
       } catch {
         resetLabels();
         setActionError('Could not move this file. Check that the destination is available and try again.');
+        void apiSession().then(sess => {
+          if (sess.active && sess.stats) setStats(sess.stats);
+        }).catch(() => {});
       } finally {
         busyRef.current = false;
       }
@@ -207,6 +216,9 @@ export default function ViewerScreen({ initialStats, startDone, onChooseAnother 
       } catch {
         resetLabels();
         setActionError('Could not move this file to the shortcut folder. Check the folder and try again.');
+        void apiSession().then(sess => {
+          if (sess.active && sess.stats) setStats(sess.stats);
+        }).catch(() => {});
       } finally {
         busyRef.current = false;
       }
@@ -246,6 +258,9 @@ export default function ViewerScreen({ initialStats, startDone, onChooseAnother 
         await withTransition('undo', fetchNextState);
       } catch {
         setActionError('Could not undo the last action. Try again.');
+        void apiSession().then(sess => {
+          if (sess.active && sess.stats) setStats(sess.stats);
+        }).catch(() => {});
       } finally {
         busyRef.current = false;
       }
