@@ -10,19 +10,32 @@ interface Props {
 
 export default function DoneScreen({ stats, onChooseAnother }: Props) {
   const [deleteCount, setDeleteCount] = useState(0);
+  const [deleteTargets, setDeleteTargets] = useState<string[]>([]);
   const [purged, setPurged] = useState(false);
   const [purging, setPurging] = useState(false);
 
   useEffect(() => {
-    apiDeleteCount().then(d => setDeleteCount(d.count)).catch(() => {});
+    apiDeleteCount()
+      .then(d => {
+        setDeleteCount(d.count);
+        if (Array.isArray(d.files)) setDeleteTargets(d.files);
+      })
+      .catch(() => {});
   }, []);
 
   async function handlePurge() {
-    if (!confirm(`Permanently delete ${deleteCount} file(s)? This cannot be undone.`)) return;
+    const sampleList = deleteTargets.slice(0, 5).join('\n');
+    const extra = deleteTargets.length > 5 ? `\n...and ${deleteTargets.length - 5} more` : '';
+    const promptMessage = deleteTargets.length > 0
+      ? `Permanently delete ${deleteCount} media file(s)?\n\nTarget files:\n${sampleList}${extra}\n\nThis cannot be undone.`
+      : `Permanently delete ${deleteCount} media file(s)? This cannot be undone.`;
+
+    if (!confirm(promptMessage)) return;
     setPurging(true);
     try {
       await apiPurgeDeleted();
       setDeleteCount(0);
+      setDeleteTargets([]);
       setPurged(true);
     } catch { /* ignore */ }
     finally { setPurging(false); }

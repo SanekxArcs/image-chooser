@@ -473,14 +473,27 @@ ipcMain.handle('browse', (_event, dirPath: string) => {
 })
 
 ipcMain.handle('get-delete-count', () => {
-  if (!session.folder) return { count: 0 }
+  if (!session.folder) return { count: 0, files: [] }
   // Count pending deletes (queued) plus already-moved files
-  let count = [...session.pending.values()].filter(a => a === 'delete').length
+  const pendingFiles = [...session.pending.entries()]
+    .filter(([_, a]) => a === 'delete')
+    .map(([f]) => f)
+
+  let diskFiles: string[] = []
   const deleteDir = join(session.folder, '_delete')
   if (existsSync(deleteDir)) {
-    count += readdirSync(deleteDir).filter(f => MEDIA_EXTENSIONS.has(extname(f).toLowerCase())).length
+    diskFiles = readdirSync(deleteDir, { withFileTypes: true })
+      .filter(
+        entry =>
+          entry.isFile() &&
+          !entry.isSymbolicLink() &&
+          MEDIA_EXTENSIONS.has(extname(entry.name).toLowerCase())
+      )
+      .map(entry => entry.name)
   }
-  return { count }
+
+  const allTargets = [...new Set([...pendingFiles, ...diskFiles])]
+  return { count: allTargets.length, files: allTargets }
 })
 
 ipcMain.handle('purge-deleted', () => {
@@ -493,12 +506,22 @@ ipcMain.handle('purge-deleted', () => {
   saveSession()
   const deleteDir = join(session.folder, '_delete')
   if (!existsSync(deleteDir)) return { purged: 0 }
-  const files = readdirSync(deleteDir)
+  const files = readdirSync(deleteDir, { withFileTypes: true })
+    .filter(
+      entry =>
+        entry.isFile() &&
+        !entry.isSymbolicLink() &&
+        MEDIA_EXTENSIONS.has(extname(entry.name).toLowerCase())
+    )
+    .map(entry => entry.name)
   let purged = 0
   for (const f of files) {
     try { unlinkSync(join(deleteDir, f)); purged++ } catch { /* skip */ }
   }
-  try { rmdirSync(deleteDir) } catch { /* skip */ }
+  try {
+    const remaining = readdirSync(deleteDir)
+    if (remaining.length === 0) rmdirSync(deleteDir)
+  } catch { /* skip */ }
   return { purged }
 })
 

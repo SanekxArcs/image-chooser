@@ -86,6 +86,7 @@ export interface BrowseResponse {
 
 export interface DeleteCountResponse {
   count: number;
+  files?: string[];
 }
 
 export interface PurgeResponse {
