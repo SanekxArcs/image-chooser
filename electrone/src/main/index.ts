@@ -48,6 +48,7 @@ const session = {
 interface SavedSession {
   folder: string
   index: number
+  nextFilename?: string | null
   pending: [string, string][]
 }
 
@@ -104,9 +105,12 @@ function saveSettingsFile(): void {
 function saveSession(): void {
   if (!session.folder) return
   try {
+    const nextFilename =
+      session.index < session.images.length ? session.images[session.index] : null
     const data: SavedSession = {
       folder: session.folder,
       index: session.index,
+      nextFilename,
       pending: [...session.pending.entries()],
     }
     writeFileSync(sessionFilePath(), JSON.stringify(data), 'utf8')
@@ -120,6 +124,29 @@ function loadSavedSession(): SavedSession | null {
   } catch {
     return null
   }
+}
+
+function computeResumeIndex(
+  images: string[],
+  pendingMap: Map<string, string>,
+  saved: SavedSession
+): number {
+  if (saved.nextFilename) {
+    const idx = images.indexOf(saved.nextFilename)
+    if (idx !== -1) return idx
+    const firstUnreviewed = images.findIndex(f => !pendingMap.has(f))
+    return firstUnreviewed !== -1 ? firstUnreviewed : 0
+  }
+  if (
+    saved.nextFilename === null &&
+    saved.index >= images.length &&
+    images.length > 0 &&
+    pendingMap.size === 0
+  ) {
+    return images.length
+  }
+  const firstUnreviewed = images.findIndex(f => !pendingMap.has(f))
+  return firstUnreviewed !== -1 ? firstUnreviewed : Math.min(saved.index, images.length)
 }
 
 function resolveDestDir(action: string): string | null {
@@ -263,7 +290,7 @@ ipcMain.handle('set-folder', (_event, folder: string) => {
     const pendingMap = new Map<string, string>(
       saved.pending.filter(([f]) => existsSync(join(folder, f)))
     )
-    const resumeIndex = Math.min(saved.index, images.length)
+    const resumeIndex = computeResumeIndex(images, pendingMap, saved)
     session.folder = folder
     session.images = images
     session.index = resumeIndex
@@ -385,8 +412,10 @@ ipcMain.handle('get-session', () => {
   if (!saved || !existsSync(saved.folder)) return { active: false }
   session.folder = saved.folder
   session.images = getMedia(saved.folder)
-  session.index = Math.min(saved.index, session.images.length)
-  session.pending = new Map(saved.pending.filter(([f]) => existsSync(join(saved.folder, f))))
+  const pendingMap = new Map(saved.pending.filter(([f]) => existsSync(join(saved.folder!, f))))
+  const resumeIndex = computeResumeIndex(session.images, pendingMap, saved)
+  session.index = resumeIndex
+  session.pending = pendingMap
   session.history = []
   const count = (a: string) => [...session.pending.values()].filter(v => v === a).length
   return {
