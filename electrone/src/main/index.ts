@@ -12,6 +12,7 @@ import {
   accessSync,
   writeFileSync,
   readFileSync,
+  statSync,
 } from 'fs'
 import { pathToFileURL } from 'url'
 
@@ -281,7 +282,9 @@ app.on('window-all-closed', () => {
 // ── IPC Handlers ──────────────────────────────────────────────────────────────
 
 ipcMain.handle('set-folder', (_event, folder: string) => {
-  if (!folder || !existsSync(folder)) throw new Error('Folder does not exist')
+  if (typeof folder !== 'string' || !folder || !existsSync(folder) || !statSync(folder).isDirectory()) {
+    throw new Error('Folder does not exist or is not a directory')
+  }
   const images = getMedia(folder)
   const saved = loadSavedSession()
 
@@ -326,6 +329,7 @@ ipcMain.handle('get-current', () => {
 })
 
 ipcMain.handle('get-image-path', (_event, offset: number) => {
+  if (typeof offset !== 'number' || !Number.isInteger(offset)) return null
   const idx = session.index + offset
   if (!session.folder || idx < 0 || idx >= session.images.length) return null
   const filename = session.images[idx]
@@ -334,6 +338,7 @@ ipcMain.handle('get-image-path', (_event, offset: number) => {
 })
 
 ipcMain.handle('action', (_event, action: string) => {
+  if (typeof action !== 'string') throw new Error('Invalid action')
   if (!session.folder || session.index >= session.images.length) {
     throw new Error('No current image')
   }
@@ -350,10 +355,13 @@ ipcMain.handle('action', (_event, action: string) => {
 })
 
 ipcMain.handle('action-shortcut', (_event, key: string) => {
+  if (typeof key !== 'string' || !/^[a-z0-9]$/i.test(key.trim())) {
+    throw new Error('Invalid shortcut key')
+  }
   if (!session.folder || session.index >= session.images.length) {
     throw new Error('No current image')
   }
-  const normalizedKey = String(key ?? '').toLowerCase()
+  const normalizedKey = key.trim().toLowerCase()
   const match = shortcuts.find(s => s.key === normalizedKey)
   if (!match) throw new Error('No folder assigned to that shortcut')
   const filename = session.images[session.index]
@@ -437,7 +445,9 @@ ipcMain.handle('get-drives', () => {
 })
 
 ipcMain.handle('browse', (_event, dirPath: string) => {
-  if (!dirPath || !existsSync(dirPath)) throw new Error('Invalid path')
+  if (typeof dirPath !== 'string' || !dirPath || !existsSync(dirPath) || !statSync(dirPath).isDirectory()) {
+    throw new Error('Invalid path')
+  }
   try {
     const entries = readdirSync(dirPath, { withFileTypes: true })
     const dirs = entries
@@ -506,9 +516,11 @@ app.on('will-quit', () => {
 
 ipcMain.handle('open-folder-dialog', async (event, title?: string) => {
   const win = BrowserWindow.fromWebContents(event.sender)
-  const result = await dialog.showOpenDialog(win!, {
+  if (!win) throw new Error('Invalid sender window')
+  const safeTitle = typeof title === 'string' ? title.slice(0, 100) : 'Select Media Folder'
+  const result = await dialog.showOpenDialog(win, {
     properties: ['openDirectory'],
-    title: title || 'Select Media Folder',
+    title: safeTitle,
   })
   if (result.canceled || result.filePaths.length === 0) return null
   return result.filePaths[0]
@@ -517,6 +529,7 @@ ipcMain.handle('open-folder-dialog', async (event, title?: string) => {
 ipcMain.handle('get-shortcuts', () => shortcuts)
 
 ipcMain.handle('save-shortcuts', (_event, list: ShortcutFolder[]) => {
+  if (!Array.isArray(list)) throw new Error('Invalid shortcut list')
   const seen = new Set<string>()
   const clean: ShortcutFolder[] = []
   for (const s of list ?? []) {
@@ -536,10 +549,11 @@ ipcMain.handle('save-shortcuts', (_event, list: ShortcutFolder[]) => {
 ipcMain.handle('get-display-settings', () => displaySettings)
 
 ipcMain.handle('save-display-settings', (_event, settings: Partial<DisplaySettings>) => {
+  if (!settings || typeof settings !== 'object') throw new Error('Invalid display settings')
   const layout: ShortcutLayout =
-    settings?.layout === 'left' || settings?.layout === 'right' ? settings.layout : 'bottom'
+    settings.layout === 'left' || settings.layout === 'right' ? settings.layout : 'bottom'
   const truncateLength =
-    typeof settings?.truncateLength === 'number' && settings.truncateLength > 0
+    typeof settings.truncateLength === 'number' && settings.truncateLength > 0
       ? Math.floor(settings.truncateLength)
       : null
   displaySettings = { truncateLength, layout }
