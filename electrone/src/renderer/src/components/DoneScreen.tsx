@@ -1,18 +1,27 @@
 import { useEffect, useState } from 'react';
-import { CheckCircle2, Trash2, FolderOpen, Loader2 } from 'lucide-react';
+import { Check, Clock, FolderOpen, ListRestart, Loader2, Trash2 } from 'lucide-react';
+
 import { apiDeleteCount, apiPurgeDeleted } from '../api';
 import type { Stats } from '../types';
+import { formatCount } from '../utils';
+import { ConfirmDialog } from './Overlays';
 
 interface Props {
   stats: Stats;
+  error: string;
+  /** Files still in the folder after applying, e.g. skipped ones. */
+  remaining: number;
+  onReviewRemaining: () => void;
   onChooseAnother: () => void;
 }
 
-export default function DoneScreen({ stats, onChooseAnother }: Props) {
-  const [deleteCount, setDeleteCount] = useState(0);
+export default function DoneScreen({ stats, error, remaining, onReviewRemaining, onChooseAnother }: Props) {
   const [deleteTargets, setDeleteTargets] = useState<string[]>([]);
-  const [purged, setPurged] = useState(false);
+  const [deleteCount, setDeleteCount] = useState(0);
+  const [confirming, setConfirming] = useState(false);
   const [purging, setPurging] = useState(false);
+  const [purged, setPurged] = useState<number | null>(null);
+  const [purgeError, setPurgeError] = useState('');
 
   useEffect(() => {
     apiDeleteCount()
@@ -23,85 +32,90 @@ export default function DoneScreen({ stats, onChooseAnother }: Props) {
       .catch(() => {});
   }, []);
 
-  async function handlePurge() {
-    const sampleList = deleteTargets.slice(0, 5).join('\n');
-    const extra = deleteTargets.length > 5 ? `\n...and ${deleteTargets.length - 5} more` : '';
-    const promptMessage = deleteTargets.length > 0
-      ? `Permanently delete ${deleteCount} media file(s)?\n\nTarget files:\n${sampleList}${extra}\n\nThis cannot be undone.`
-      : `Permanently delete ${deleteCount} media file(s)? This cannot be undone.`;
-
-    if (!confirm(promptMessage)) return;
+  async function purge() {
+    setConfirming(false);
     setPurging(true);
+    setPurgeError('');
     try {
-      await apiPurgeDeleted();
+      const result = await apiPurgeDeleted();
+      setPurged(result.purged);
       setDeleteCount(0);
       setDeleteTargets([]);
-      setPurged(true);
-    } catch { /* ignore */ }
-    finally { setPurging(false); }
+    } catch (err) {
+      setPurgeError(err instanceof Error ? err.message : 'Could not delete the files.');
+    } finally {
+      setPurging(false);
+    }
   }
 
   return (
-    <div
-      className="flex flex-col items-center gap-5 p-8 text-center"
-      style={{
-        background: 'var(--surface)',
-        border: '1px solid var(--border)',
-        borderRadius: 'var(--radius)',
-        minWidth: '280px',
-      }}
-    >
-      <CheckCircle2 size={40} style={{ color: 'var(--keep)' }} strokeWidth={1.5} />
+    <div className="screen">
+      <div className="hero">
+        <div className="hero-mark"><Check size={36} strokeWidth={2.2} /></div>
+        <div>
+          <h1>All sorted</h1>
+          <p>Your decisions have been applied to the folder.</p>
+        </div>
 
-      <div className="flex flex-col gap-1">
-        <h2 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>All done</h2>
-        <p className="text-sm" style={{ color: 'var(--muted)' }}>
-          {stats.kept} kept &middot; {stats.later} later &middot; {stats.deleted} deleted
-        </p>
-      </div>
+        <div className="stat-tiles">
+          <div className="stat-tile">
+            <span className="num">{formatCount(stats.kept)}</span>
+            <span className="cap"><Check size={13} strokeWidth={2.4} /> Kept</span>
+          </div>
+          <div className="stat-tile">
+            <span className="num">{formatCount(stats.later)}</span>
+            <span className="cap"><Clock size={13} strokeWidth={2.2} /> Later</span>
+          </div>
+          <div className="stat-tile">
+            <span className="num">{formatCount(stats.deleted)}</span>
+            <span className="cap"><Trash2 size={13} strokeWidth={2.2} /> Deleted</span>
+          </div>
+        </div>
 
-      <div className="flex flex-col gap-2 w-full">
-        {deleteCount > 0 && !purged && (
-          <button
-            type="button"
-            onClick={() => void handlePurge()}
-            disabled={purging}
-            className="flex items-center justify-center gap-2 w-full py-2 text-sm font-medium transition-colors disabled:opacity-50"
-            style={{
-              background: '#3b0a14',
-              border: '1px solid #7f1d1d',
-              borderRadius: 'var(--radius)',
-              color: '#fca5a5',
-              cursor: purging ? 'not-allowed' : 'pointer',
-            }}
-            onMouseEnter={e => { if (!purging) e.currentTarget.style.background = '#4c0a19'; }}
-            onMouseLeave={e => { if (!purging) e.currentTarget.style.background = '#3b0a14'; }}
-          >
-            {purging
-              ? <><Loader2 size={14} className="animate-spin" /><span>Deleting…</span></>
-              : <><Trash2 size={14} strokeWidth={1.8} /><span>Permanently delete {deleteCount} files</span></>
-            }
+        {(error || purgeError) && <div className="notice" role="alert">{error || purgeError}</div>}
+
+        <div className="hero-actions">
+          <button type="button" className="btn btn--primary btn--large" onClick={onChooseAnother}>
+            <FolderOpen size={18} strokeWidth={1.9} />
+            Open another folder
           </button>
-        )}
-
-        <button
-          type="button"
-          onClick={onChooseAnother}
-          className="flex items-center justify-center gap-2 w-full py-2 text-sm font-medium transition-colors"
-          style={{
-            background: '#065f46',
-            border: '1px solid #10b981',
-            borderRadius: 'var(--radius)',
-            color: '#d1fae5',
-            cursor: 'pointer',
-          }}
-          onMouseEnter={e => { e.currentTarget.style.background = '#047857'; }}
-          onMouseLeave={e => { e.currentTarget.style.background = '#065f46'; }}
-        >
-          <FolderOpen size={14} strokeWidth={1.8} />
-          <span>Choose another folder</span>
-        </button>
+          {remaining > 0 && (
+            <button type="button" className="btn btn--large" onClick={onReviewRemaining}>
+              <ListRestart size={18} strokeWidth={1.9} />
+              Review {formatCount(remaining)} remaining
+            </button>
+          )}
+          {deleteCount > 0 && (
+            <button type="button" className="btn btn--danger btn--large" onClick={() => setConfirming(true)} disabled={purging}>
+              {purging ? <Loader2 size={17} className="spin" /> : <Trash2 size={17} strokeWidth={1.9} />}
+              {purging ? 'Deleting…' : `Empty Delete folder (${formatCount(deleteCount)})`}
+            </button>
+          )}
+          {purged !== null && (
+            <p style={{ margin: 0, fontSize: 13, color: 'var(--text-2)' }}>
+              Permanently deleted {formatCount(purged)} {purged === 1 ? 'file' : 'files'}.
+            </p>
+          )}
+        </div>
       </div>
+
+      {confirming && (
+        <ConfirmDialog
+          title={`Permanently delete ${formatCount(deleteCount)} ${deleteCount === 1 ? 'file' : 'files'}?`}
+          confirmLabel="Delete permanently"
+          danger
+          onConfirm={() => void purge()}
+          onCancel={() => setConfirming(false)}
+        >
+          <p>Files in the <strong>_delete</strong> folder will be removed from disk. This cannot be undone.</p>
+          {deleteTargets.length > 0 && (
+            <ul>
+              {deleteTargets.slice(0, 50).map(name => <li key={name}>{name}</li>)}
+              {deleteTargets.length > 50 && <li>…and {formatCount(deleteTargets.length - 50)} more</li>}
+            </ul>
+          )}
+        </ConfirmDialog>
+      )}
     </div>
   );
 }

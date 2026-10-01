@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, net, protocol } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, nativeTheme, net, protocol, screen } from 'electron'
 import { join, extname, dirname, basename } from 'path'
 import {
   existsSync,
@@ -14,6 +14,7 @@ import {
   readFileSync,
   statSync,
 } from 'fs'
+import { stat } from 'fs/promises'
 import { pathToFileURL } from 'url'
 
 protocol.registerSchemesAsPrivileged([
@@ -24,6 +25,7 @@ protocol.registerSchemesAsPrivileged([
       secure: true,
       corsEnabled: true,
       supportFetchAPI: true,
+      stream: true,
     },
   },
 ])
@@ -59,10 +61,16 @@ interface ShortcutFolder {
 }
 
 type ShortcutLayout = 'bottom' | 'left' | 'right'
+type Theme = 'system' | 'light' | 'dark' | 'oled'
 
 interface DisplaySettings {
   truncateLength: number | null
   layout: ShortcutLayout
+}
+
+interface AppearanceSettings {
+  theme: Theme
+  highPerformanceGpu: boolean
 }
 
 interface ApplyFailure {
@@ -71,10 +79,24 @@ interface ApplyFailure {
   error: string
 }
 
-const DEFAULT_DISPLAY_SETTINGS: DisplaySettings = { truncateLength: 10, layout: 'bottom' }
+const DEFAULT_DISPLAY_SETTINGS: DisplaySettings = { truncateLength: 14, layout: 'bottom' }
+const DEFAULT_APPEARANCE: AppearanceSettings = { theme: 'system', highPerformanceGpu: true }
+const THEMES: Theme[] = ['system', 'light', 'dark', 'oled']
+
+// Title bar overlay colours must match the renderer's --chrome token per theme.
+const CHROME_COLORS: Record<Exclude<Theme, 'system'>, { bg: string; fg: string }> = {
+  light: { bg: '#f5f5f5', fg: '#0a0a0a' },
+  dark: { bg: '#121212', fg: '#f5f5f5' },
+  oled: { bg: '#000000', fg: '#f5f5f5' },
+}
+const TITLE_BAR_HEIGHT = 44
+const DEV_ICON = join(__dirname, '../../build', process.platform === 'win32' ? 'icon.ico' : 'icon.png')
 
 let shortcuts: ShortcutFolder[] = []
 let displaySettings: DisplaySettings = { ...DEFAULT_DISPLAY_SETTINGS }
+let appearance: AppearanceSettings = { ...DEFAULT_APPEARANCE }
+
+const nameCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
 
 function sessionFilePath(): string {
   return join(app.getPath('userData'), 'image-chooser-session.json')
@@ -84,24 +106,58 @@ function settingsFilePath(): string {
   return join(app.getPath('userData'), 'image-chooser-settings.json')
 }
 
-function loadSettingsFile(): { shortcuts: ShortcutFolder[]; display: DisplaySettings } {
+function loadSettingsFile(): {
+  shortcuts: ShortcutFolder[]
+  display: DisplaySettings
+  appearance: AppearanceSettings
+} {
   try {
     const raw = readFileSync(settingsFilePath(), 'utf8')
-    const data = JSON.parse(raw) as { shortcuts?: ShortcutFolder[]; display?: Partial<DisplaySettings> }
+    const data = JSON.parse(raw) as {
+      shortcuts?: ShortcutFolder[]
+      display?: Partial<DisplaySettings>
+      appearance?: Partial<AppearanceSettings>
+    }
+    const loadedAppearance = { ...DEFAULT_APPEARANCE, ...data.appearance }
+    if (!THEMES.includes(loadedAppearance.theme)) loadedAppearance.theme = DEFAULT_APPEARANCE.theme
     return {
       shortcuts: Array.isArray(data.shortcuts) ? data.shortcuts : [],
       display: { ...DEFAULT_DISPLAY_SETTINGS, ...data.display },
+      appearance: loadedAppearance,
     }
   } catch {
-    return { shortcuts: [], display: { ...DEFAULT_DISPLAY_SETTINGS } }
+    return {
+      shortcuts: [],
+      display: { ...DEFAULT_DISPLAY_SETTINGS },
+      appearance: { ...DEFAULT_APPEARANCE },
+    }
   }
 }
 
 function saveSettingsFile(): void {
   try {
-    writeFileSync(settingsFilePath(), JSON.stringify({ shortcuts, display: displaySettings }), 'utf8')
+    writeFileSync(
+      settingsFilePath(),
+      JSON.stringify({ shortcuts, display: displaySettings, appearance }),
+      'utf8'
+    )
   } catch { /* ignore */ }
 }
+
+// Settings are read before `ready` because GPU switches only take effect then.
+{
+  const loaded = loadSettingsFile()
+  shortcuts = loaded.shortcuts
+  displaySettings = loaded.display
+  appearance = loaded.appearance
+}
+
+if (appearance.highPerformanceGpu) {
+  // On hybrid-GPU laptops Chromium otherwise picks the integrated adapter.
+  app.commandLine.appendSwitch('force_high_performance_gpu')
+}
+app.commandLine.appendSwitch('enable-gpu-rasterization')
+app.commandLine.appendSwitch('enable-zero-copy')
 
 function saveSession(): void {
   if (!session.folder) return
@@ -220,17 +276,77 @@ function getMedia(folder: string): string[] {
   return readdirSync(folder, { withFileTypes: true })
     .filter(entry => entry.isFile() && MEDIA_EXTENSIONS.has(extname(entry.name).toLowerCase()))
     .map(entry => entry.name)
-    .sort()
+    .sort(nameCollator.compare)
+}
+
+function isVideoName(filename: string): boolean {
+  return VIDEO_EXTENSIONS.has(extname(filename).toLowerCase())
+}
+
+function sessionStats() {
+  let kept = 0
+  let deleted = 0
+  let later = 0
+  for (const action of session.pending.values()) {
+    if (action === 'keep') kept++
+    else if (action === 'delete') deleted++
+    else if (action === 'later') later++
+  }
+  return { kept, deleted, later }
+}
+
+// The renderer advances optimistically, so every decision names the file it
+// was meant for. A mismatch means the two sides drifted and must never move
+// the wrong file.
+function assertCurrent(expected: unknown): string {
+  if (!session.folder || session.index >= session.images.length) {
+    throw new Error('No current image')
+  }
+  const filename = session.images[session.index]
+  if (expected !== undefined && expected !== filename) {
+    throw new Error('Out of sync with the current file')
+  }
+  return filename
+}
+
+function resolvedTheme(): Exclude<Theme, 'system'> {
+  if (appearance.theme !== 'system') return appearance.theme
+  return nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
+}
+
+function applyNativeTheme(): void {
+  nativeTheme.themeSource = appearance.theme === 'oled' ? 'dark' : appearance.theme
+}
+
+function applyWindowChrome(win: BrowserWindow): void {
+  const colors = CHROME_COLORS[resolvedTheme()]
+  win.setBackgroundColor(colors.bg)
+  if (process.platform !== 'darwin') {
+    try {
+      win.setTitleBarOverlay({ color: colors.bg, symbolColor: colors.fg, height: TITLE_BAR_HEIGHT })
+    } catch { /* overlay not available on this platform */ }
+  }
 }
 
 function createWindow(): void {
+  applyNativeTheme()
+  const colors = CHROME_COLORS[resolvedTheme()]
+  const { workAreaSize } = screen.getPrimaryDisplay()
+
   const win = new BrowserWindow({
-    width: 900,
-    height: 700,
-    minWidth: 480,
-    minHeight: 560,
-    backgroundColor: '#0f0f13',
+    width: Math.round(Math.min(1680, workAreaSize.width * 0.86)),
+    height: Math.round(Math.min(1050, workAreaSize.height * 0.88)),
+    minWidth: 380,
+    minHeight: 500,
+    show: false,
+    backgroundColor: colors.bg,
     title: 'Image Chooser',
+    // Packaged builds take the icon from the executable; this covers dev runs and Linux.
+    ...(existsSync(DEV_ICON) ? { icon: DEV_ICON } : {}),
+    titleBarStyle: 'hidden',
+    ...(process.platform === 'darwin'
+      ? { trafficLightPosition: { x: 16, y: 15 } }
+      : { titleBarOverlay: { color: colors.bg, symbolColor: colors.fg, height: TITLE_BAR_HEIGHT } }),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -238,9 +354,12 @@ function createWindow(): void {
       sandbox: true,
       webSecurity: true,
       webviewTag: false,
+      spellcheck: false,
+      backgroundThrottling: false,
     },
   })
 
+  win.once('ready-to-show', () => win.show())
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   win.webContents.on('will-navigate', event => event.preventDefault())
 
@@ -252,7 +371,7 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
-  protocol.handle('image-chooser-media', request => {
+  protocol.handle('image-chooser-media', async request => {
     try {
       const name = new URL(request.url).searchParams.get('name')
       // Reject anything that is not a plain filename inside the session folder
@@ -261,16 +380,26 @@ app.whenReady().then(() => {
       }
       const filepath = join(session.folder, name)
       if (!existsSync(filepath)) return new Response(null, { status: 404 })
-      return net.fetch(pathToFileURL(filepath).toString())
+
+      // Forward Range so videos can seek without reading the whole file.
+      const range = request.headers.get('range')
+      const response = await net.fetch(pathToFileURL(filepath).toString(), {
+        headers: range ? { range } : undefined,
+      })
+      // The decode worker fetches with CORS, so the response must allow it.
+      const headers = new Headers(response.headers)
+      headers.set('Access-Control-Allow-Origin', '*')
+      return new Response(response.body, { status: response.status, headers })
     } catch {
       return new Response(null, { status: 404 })
     }
   })
 
-  const loaded = loadSettingsFile()
-  shortcuts = loaded.shortcuts
-  displaySettings = loaded.display
   createWindow()
+
+  nativeTheme.on('updated', () => {
+    for (const win of BrowserWindow.getAllWindows()) applyWindowChrome(win)
+  })
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
@@ -301,12 +430,7 @@ ipcMain.handle('set-folder', (_event, folder: string) => {
     session.index = resumeIndex
     session.pending = pendingMap
     session.history = []
-    const count = (a: string) => [...pendingMap.values()].filter(v => v === a).length
-    return {
-      total: images.length,
-      index: resumeIndex,
-      stats: { kept: count('keep'), deleted: count('delete'), later: count('later') },
-    }
+    return { total: images.length, index: resumeIndex, stats: sessionStats() }
   }
 
   // Fresh start
@@ -326,8 +450,34 @@ ipcMain.handle('get-current', () => {
     return { done: true, total: session.images.length }
   }
   const filename = session.images[session.index]
-  const isVideo = VIDEO_EXTENSIONS.has(extname(filename).toLowerCase())
-  return { filename, index: session.index, total: session.images.length, done: false, isVideo }
+  return { filename, index: session.index, total: session.images.length, done: false, isVideo: isVideoName(filename) }
+})
+
+// The whole queue in one round trip lets the renderer prefetch ahead and
+// animate decisions without waiting on IPC.
+ipcMain.handle('get-queue', () => {
+  if (!session.folder) throw new Error('No folder selected')
+  return {
+    folder: session.folder,
+    items: session.images.map(name => ({
+      name,
+      isVideo: isVideoName(name),
+      decision: session.pending.get(name) ?? null,
+    })),
+    index: session.index,
+    stats: sessionStats(),
+    history: session.history.map(h => ({ name: h.filename, decision: h.action })),
+  }
+})
+
+ipcMain.handle('get-file-info', async (_event, name: string) => {
+  if (!session.folder || typeof name !== 'string' || name !== basename(name)) return null
+  try {
+    const info = await stat(join(session.folder, name))
+    return { size: info.size, modified: info.mtimeMs }
+  } catch {
+    return null
+  }
 })
 
 ipcMain.handle('get-image-path', (_event, offset: number) => {
@@ -335,60 +485,62 @@ ipcMain.handle('get-image-path', (_event, offset: number) => {
   const idx = session.index + offset
   if (!session.folder || idx < 0 || idx >= session.images.length) return null
   const filename = session.images[idx]
-  const isVideo = VIDEO_EXTENSIONS.has(extname(filename).toLowerCase())
   // The filename is part of the URL so each item gets a distinct resource —
   // a fixed URL would make the renderer reuse the first image from cache forever.
-  return { url: `image-chooser-media://media/?name=${encodeURIComponent(filename)}`, isVideo }
+  return { url: `image-chooser-media://media/?name=${encodeURIComponent(filename)}`, isVideo: isVideoName(filename) }
 })
 
-ipcMain.handle('action', (_event, action: string) => {
-  if (typeof action !== 'string') throw new Error('Invalid action')
-  if (!session.folder || session.index >= session.images.length) {
-    throw new Error('No current image')
+function advanceResult() {
+  return {
+    done: session.index >= session.images.length,
+    index: session.index,
+    total: session.images.length,
+    canUndo: session.history.length > 0,
   }
+}
+
+ipcMain.handle('action', (_event, action: string, expected?: string) => {
+  if (typeof action !== 'string') throw new Error('Invalid action')
   const subdirMap: Record<string, string> = { keep: '_keep', delete: '_delete', later: '_later' }
   if (!subdirMap[action]) throw new Error('Unknown action')
-  const filename = session.images[session.index]
+  const filename = assertCurrent(expected)
   // Queue the move instead of renaming immediately — avoids EBUSY on open video files
   session.pending.set(filename, action)
   session.history.push({ filename, action })
   session.index++
-  const done = session.index >= session.images.length
   saveSession()
-  return { done, index: session.index, total: session.images.length, canUndo: session.history.length > 0 }
+  return advanceResult()
 })
 
-ipcMain.handle('action-shortcut', (_event, key: string) => {
+ipcMain.handle('action-shortcut', (_event, key: string, expected?: string) => {
   if (typeof key !== 'string' || !/^[a-z0-9]$/i.test(key.trim())) {
     throw new Error('Invalid shortcut key')
-  }
-  if (!session.folder || session.index >= session.images.length) {
-    throw new Error('No current image')
   }
   const normalizedKey = key.trim().toLowerCase()
   const match = shortcuts.find(s => s.key === normalizedKey)
   if (!match) throw new Error('No folder assigned to that shortcut')
-  const filename = session.images[session.index]
+  const filename = assertCurrent(expected)
   const actionId = `shortcut:${normalizedKey}`
   session.pending.set(filename, actionId)
   session.history.push({ filename, action: actionId })
   session.index++
-  const done = session.index >= session.images.length
   saveSession()
-  return { done, index: session.index, total: session.images.length, canUndo: session.history.length > 0 }
+  return advanceResult()
 })
 
-ipcMain.handle('skip', () => {
-  if (!session.folder || session.index >= session.images.length) return
-  const filename = session.images[session.index]
+ipcMain.handle('skip', (_event, expected?: string) => {
+  const filename = assertCurrent(expected)
   session.history.push({ filename, action: 'skip' })
   session.index++
-  const done = session.index >= session.images.length
   saveSession()
-  return { done, index: session.index, total: session.images.length, canUndo: session.history.length > 0 }
+  return advanceResult()
 })
 
-ipcMain.handle('back', () => {
+ipcMain.handle('back', (_event, expected?: string) => {
+  const top = session.history[session.history.length - 1]
+  if (top && expected !== undefined && top.filename !== expected) {
+    throw new Error('Out of sync with the undo history')
+  }
   const prev = session.history.pop()
   if (!prev) {
     return { index: session.index, total: session.images.length, canUndo: false }
@@ -410,13 +562,12 @@ ipcMain.handle('back', () => {
 ipcMain.handle('get-session', () => {
   // Use in-memory session if available
   if (session.folder && existsSync(session.folder)) {
-    const count = (a: string) => [...session.pending.values()].filter(v => v === a).length
     return {
       active: true,
       folder: session.folder,
       index: session.index,
       total: session.images.length,
-      stats: { kept: count('keep'), deleted: count('delete'), later: count('later') },
+      stats: sessionStats(),
     }
   }
   // Fall back to saved session on disk (cold start / app restart)
@@ -429,13 +580,12 @@ ipcMain.handle('get-session', () => {
   session.index = resumeIndex
   session.pending = pendingMap
   session.history = []
-  const count = (a: string) => [...session.pending.values()].filter(v => v === a).length
   return {
     active: true,
     folder: session.folder,
     index: session.index,
     total: session.images.length,
-    stats: { kept: count('keep'), deleted: count('delete'), later: count('later') },
+    stats: sessionStats(),
   }
 })
 
@@ -586,4 +736,25 @@ ipcMain.handle('save-display-settings', (_event, settings: Partial<DisplaySettin
   displaySettings = { truncateLength, layout }
   saveSettingsFile()
   return displaySettings
+})
+
+// Read synchronously by the preload so the first paint already has the theme.
+ipcMain.on('get-appearance-sync', event => {
+  event.returnValue = { ...appearance, platform: process.platform }
+})
+
+ipcMain.handle('save-appearance', (event, next: Partial<AppearanceSettings>) => {
+  if (!next || typeof next !== 'object') throw new Error('Invalid appearance settings')
+  if (next.theme !== undefined) {
+    if (!THEMES.includes(next.theme)) throw new Error('Unknown theme')
+    appearance.theme = next.theme
+  }
+  if (typeof next.highPerformanceGpu === 'boolean') {
+    appearance.highPerformanceGpu = next.highPerformanceGpu
+  }
+  saveSettingsFile()
+  applyNativeTheme()
+  const win = BrowserWindow.fromWebContents(event.sender)
+  if (win) applyWindowChrome(win)
+  return appearance
 })

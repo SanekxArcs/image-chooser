@@ -2,15 +2,18 @@ appId: com.imagechooser.app
 productName: Image Chooser
 directories:
   output: dist-electron
+  buildResources: build
 files:
   - out/main/**/*
   - out/preload/**/*
   - out/renderer/**/*
 win:
+  icon: build/icon.ico
   target:
     - target: nsis
       arch: x64
 mac:
+  icon: build/icon.png
   target:
     - dmg
     - zip
@@ -18,3 +21,5 @@ mac:
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
+linux:
+  icon: build/icon.png

@@ -1,6 +1,7 @@
 import type {
   Action,
   ActionResponse,
+  AppearanceSettings,
   ApplyPendingResponse,
   BackResponse,
   BrowseResponse,
@@ -8,8 +9,10 @@ import type {
   DeleteCountResponse,
   DisplaySettings,
   DrivesResponse,
+  FileInfo,
   MediaPathResponse,
   PurgeResponse,
+  QueueResponse,
   SessionResponse,
   SetFolderResponse,
   ShortcutFolder,
@@ -18,13 +21,17 @@ import type {
 declare global {
   interface Window {
     electronAPI: {
+      initialAppearance: AppearanceSettings & { platform: string };
+      getPathForFile(file: File): string;
       setFolder(folder: string): Promise<SetFolderResponse>;
       getCurrent(): Promise<CurrentResponse>;
+      getQueue(): Promise<QueueResponse>;
+      getFileInfo(name: string): Promise<FileInfo | null>;
       getImagePath(offset: number): Promise<MediaPathResponse | null>;
-      action(type: Action): Promise<ActionResponse>;
-      actionShortcut(key: string): Promise<ActionResponse>;
-      skip(): Promise<ActionResponse>;
-      back(): Promise<BackResponse>;
+      action(type: Action, expected?: string): Promise<ActionResponse>;
+      actionShortcut(key: string, expected?: string): Promise<ActionResponse>;
+      skip(expected?: string): Promise<ActionResponse>;
+      back(expected?: string): Promise<BackResponse>;
       getSession(): Promise<SessionResponse>;
       getDrives(): Promise<DrivesResponse>;
       browse(path: string): Promise<BrowseResponse>;
@@ -36,6 +43,7 @@ declare global {
       saveShortcuts(list: ShortcutFolder[]): Promise<ShortcutFolder[]>;
       getDisplaySettings(): Promise<DisplaySettings>;
       saveDisplaySettings(settings: DisplaySettings): Promise<DisplaySettings>;
+      saveAppearance(settings: Partial<AppearanceSettings>): Promise<AppearanceSettings>;
     };
   }
 }

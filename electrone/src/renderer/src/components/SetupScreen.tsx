@@ -1,159 +1,121 @@
-import { useState } from "react";
-import { FolderOpen, Loader2, Settings } from "lucide-react";
-import { apiSetFolder, apiOpenFolderDialog } from "../api";
-import type { Stats } from "../types";
+import { useRef, useState } from 'react';
+import { FolderOpen, Loader2 } from 'lucide-react';
+
+import { apiOpenFolderDialog, apiSetFolder, pathForDroppedFile } from '../api';
+import AppMark from './AppMark';
+import { Toast } from './Overlays';
+import TitleBar from './TitleBar';
 
 interface Props {
-  onFolderSelected: (folder: string, stats: Stats, startDone: boolean) => void;
+  onFolderSelected: () => void;
   onOpenSettings: () => void;
 }
 
+const KEYS: Array<[string, string]> = [
+  ['→', 'Keep'],
+  ['←', 'Delete'],
+  ['↓', 'Later'],
+  ['↑', 'Undo'],
+  ['␣', 'Skip'],
+  ['↵', 'Zoom 100%'],
+  ['⇧', 'Video sound'],
+  ['Esc', 'Change folder'],
+];
+
 export default function SetupScreen({ onFolderSelected, onOpenSettings }: Props) {
-  const [error, setError] = useState("");
+  const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const dragDepth = useRef(0);
 
-  async function handleBrowse() {
-    const path = await apiOpenFolderDialog();
-    if (!path) return;
-
+  async function open(path: string) {
     setLoading(true);
-    setError("");
+    setError('');
     try {
       const data = await apiSetFolder(path);
       if (data.total === 0 && !data.stats.kept && !data.stats.deleted && !data.stats.later) {
-        setError("No images or videos found in that folder.");
+        setError('No images or videos found in that folder.');
         setLoading(false);
         return;
       }
-      onFolderSelected(
-        path,
-        data.stats,
-        (data.index ?? 0) >= data.total,
-      );
+      onFolderSelected();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Failed to open folder.");
+      setError(err instanceof Error ? err.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '') : 'Failed to open folder.');
       setLoading(false);
     }
   }
 
+  async function browse() {
+    const path = await apiOpenFolderDialog();
+    if (path) await open(path);
+  }
+
   return (
-    <div
-      className="flex items-center justify-center w-full h-screen"
-      style={{ background: "var(--bg)" }}
-    >
+    <>
+      <TitleBar
+        onOpenSettings={onOpenSettings}
+        left={(
+          <div className="titlebar-title">
+            <span className="mark"><AppMark size={18} /></span>
+            Image Chooser
+          </div>
+        )}
+      />
       <div
-        className="w-72 flex flex-col gap-6 p-8 relative"
-        style={{
-          background: "var(--surface)",
-          border: "1px solid var(--border)",
-          borderRadius: "var(--radius)",
+        className="screen"
+        onDragEnter={e => {
+          e.preventDefault();
+          dragDepth.current++;
+          setDragging(true);
+        }}
+        onDragOver={e => e.preventDefault()}
+        onDragLeave={() => {
+          dragDepth.current = Math.max(0, dragDepth.current - 1);
+          if (dragDepth.current === 0) setDragging(false);
+        }}
+        onDrop={e => {
+          e.preventDefault();
+          dragDepth.current = 0;
+          setDragging(false);
+          const file = e.dataTransfer.files[0];
+          const path = file ? pathForDroppedFile(file) : '';
+          if (path) void open(path);
         }}
       >
-        {/* Settings button */}
-        <button
-          type="button"
-          onClick={onOpenSettings}
-          title="Settings"
-          className="absolute flex items-center justify-center transition-colors"
-          style={{
-            top: "10px", right: "10px", width: "26px", height: "26px",
-            background: "none", border: "none", cursor: "pointer",
-            color: "var(--muted)", borderRadius: "var(--radius)",
-          }}
-          onMouseEnter={(e) => { e.currentTarget.style.color = "var(--text)"; }}
-          onMouseLeave={(e) => { e.currentTarget.style.color = "var(--muted)"; }}
-        >
-          <Settings size={15} strokeWidth={1.8} />
-        </button>
+        <div className="hero">
+          <div className="hero-mark"><AppMark size={62} /></div>
+          <div>
+            <h1>Sort a folder at the<br />speed of a swipe.</h1>
+            <p>Keep, delete or save for later — your files never leave this computer.</p>
+          </div>
 
-        {/* Header */}
-        <div className="flex flex-col mx-auto gap-1">
-          <h1
-            className="text-xl font-semibold text-center tracking-tight"
-            style={{ color: "var(--keep)" }}
-          >
-            Image Chooser
-          </h1>
-          <p className="text-sm text-center" style={{ color: "var(--muted)" }}>
-            Sort your media, quickly.
-          </p>
-        </div>
-
-        {/* Browse button */}
-        <button
-          type="button"
-          onClick={() => void handleBrowse()}
-          disabled={loading}
-          className="flex items-center justify-center gap-2 w-full py-2.5 text-sm font-medium transition-colors disabled:opacity-50"
-          style={{
-            background: loading ? "var(--surface-2)" : "#065f46",
-            color: loading ? "var(--muted)" : "#d1fae5",
-            border: "1px solid",
-            borderColor: loading ? "var(--border)" : "#10b981",
-            borderRadius: "var(--radius)",
-            cursor: loading ? "not-allowed" : "pointer",
-          }}
-          onMouseEnter={(e) => {
-            if (!loading) e.currentTarget.style.background = "#047857";
-          }}
-          onMouseLeave={(e) => {
-            if (!loading) e.currentTarget.style.background = "#065f46";
-          }}
-        >
-          {loading ? (
-            <>
-              <Loader2 size={15} className="animate-spin" />
-              <span>Loading…</span>
-            </>
-          ) : (
-            <>
-              <FolderOpen size={15} />
-              <span>Choose folder</span>
-            </>
-          )}
-        </button>
-
-        {/* Error */}
-        {error && (
-          <p className="text-xs" style={{ color: "var(--delete)" }}>
-            {error}
-          </p>
-        )}
-
-        {/* Hints */}
-        <div className="grid grid-cols-2 mx-auto gap-1.5">
-          {[
-            ["←", "Delete"],
-            ["→", "Keep"],
-            ["↓", "Later"],
-            ["↑", "Undo"],
-            ["Space", "Skip"],
-            ["Shift", "Sound"],
-            ["Escape", "Folder choose"],
-          ].map(([key, label]) => (
-            <div
-              key={key}
-              className="flex mx-auto last:col-span-2 cursor-default items-center gap-2"
+          <div className="hero-actions">
+            <button
+              type="button"
+              className="btn btn--primary btn--large"
+              onClick={() => void browse()}
+              disabled={loading}
+              style={{ minWidth: 220 }}
             >
-              <kbd
-                className="inline-flex items-center justify-center text-xs px-1.5 py-0.5 font-mono"
-                style={{
-                  background: "var(--bg)",
-                  border: "1px solid var(--border-2)",
-                  borderRadius: "4px",
-                  color: "var(--muted)",
-                  minWidth: "22px",
-                }}
-              >
-                {key}
-              </kbd>
-              <span className="text-xs" style={{ color: "var(--muted)" }}>
-                {label}
-              </span>
-            </div>
-          ))}
+              {loading ? <Loader2 size={18} className="spin" /> : <FolderOpen size={18} strokeWidth={1.9} />}
+              {loading ? 'Opening…' : 'Open folder'}
+            </button>
+            <span className="drop-hint">or drop a folder anywhere in this window</span>
+          </div>
+
+          <div className="keys">
+            {KEYS.map(([key, label]) => (
+              <div key={key} className="key-tile">
+                <kbd className="kbd">{key}</kbd>
+                <span>{label}</span>
+              </div>
+            ))}
+          </div>
         </div>
+
+        {dragging && <div className="drop-overlay">Drop to open this folder</div>}
       </div>
-    </div>
+      {error && <Toast message={error} onClose={() => setError('')} />}
+    </>
   );
 }
