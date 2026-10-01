@@ -1,7 +1,15 @@
 export type Action = 'keep' | 'later' | 'delete';
 
+/** What the main process records for an item: a built-in action, `shortcut:<key>`, or `skip`. */
+export type Decision = Action | `shortcut:${string}` | 'skip';
+
 export interface MediaItem {
   url: string | null;
+  isVideo: boolean;
+}
+
+export interface QueueItem {
+  name: string;
   isVideo: boolean;
 }
 
@@ -17,6 +25,19 @@ export interface CurrentResponse {
   index?: number;
   total: number;
   isVideo?: boolean;
+}
+
+export interface QueueResponse {
+  folder: string;
+  items: Array<QueueItem & { decision: string | null }>;
+  index: number;
+  stats: Stats;
+  history: Array<{ name: string; decision: string }>;
+}
+
+export interface FileInfo {
+  size: number;
+  modified: number;
 }
 
 export interface MediaPathResponse {
@@ -56,6 +77,14 @@ export type ShortcutLayout = 'bottom' | 'left' | 'right';
 export interface DisplaySettings {
   truncateLength: number | null;
   layout: ShortcutLayout;
+}
+
+export type Theme = 'system' | 'light' | 'dark' | 'oled';
+export type ResolvedTheme = Exclude<Theme, 'system'>;
+
+export interface AppearanceSettings {
+  theme: Theme;
+  highPerformanceGpu: boolean;
 }
 
 export interface SetFolderResponse {

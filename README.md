@@ -19,6 +19,9 @@ Large media folders are painful to clean one file at a time. Image Chooser puts 
 - Send media to **Keep**, **Later**, **Delete**, or custom shortcut folders.
 - Undo the most recent decisions before they are applied.
 - Resume an unfinished desktop session after reopening the app.
+- Stay smooth on 24–45 MP camera files: photos are decoded off the main thread at screen resolution and prefetched ahead, so decisions animate instantly.
+- Check focus with a true 100% zoom (`Enter` or double-click).
+- Light, Dark, and true-black OLED themes, plus a layout that adapts from a phone-sized window to 21:9 and 32:9 ultrawide monitors.
 
 ## What happens to my files?
 
@@ -75,15 +78,19 @@ npm run dist
 | `↓` | Move to Later |
 | `↑` | Undo last action |
 | `Space` | Skip |
+| `Enter` | Zoom to 100% (again or `Esc` to fit) |
 | `Shift` | Toggle video sound |
 | `Esc` | Choose another folder |
+| `Ctrl+I` | Show or hide the details panel |
+| `Ctrl+B` | Show or hide the filmstrip |
+| `Ctrl+,` | Settings |
 | Custom letter/number | Move to its configured shortcut folder |
 
 You can also drag right to keep, left to delete, or down for later.
 
 ## Folder shortcuts and display settings
 
-From the setup screen, select **Settings** to assign a single letter or number to a destination folder. During review, press that key to queue the current item for that destination. The same settings screen lets you choose whether the shortcut legend appears at the bottom, left, or right, and how folder names are truncated.
+Open **Settings** (the gear in the title bar, or `Ctrl+,`) to assign a single letter or number to a destination folder. During review, press that key to queue the current item for that destination. Settings also controls the theme (System, Light, Dark, OLED), whether folder shortcuts appear in the bottom bar or the side panel, how folder names are shortened, and whether the app prefers the dedicated GPU on laptops with two (applies after restart).
 
 ## Browser version
 

@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Image Chooser app icon: a photo card being picked from a stack. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2c2c2e"/>
+      <stop offset="1" stop-color="#050505"/>
+    </linearGradient>
+    <linearGradient id="photo" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#48484a"/>
+      <stop offset="1" stop-color="#0c0c0c"/>
+    </linearGradient>
+    <clipPath id="photo-clip">
+      <rect x="338" y="282" width="348" height="348" rx="30"/>
+    </clipPath>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="22" stdDeviation="26" flood-color="#000" flood-opacity="0.6"/>
+    </filter>
+  </defs>
+
+  <rect x="64" y="64" width="896" height="896" rx="208" fill="url(#bg)"/>
+  <rect x="65.5" y="65.5" width="893" height="893" rx="206.5" fill="none" stroke="#fff" stroke-opacity="0.1" stroke-width="3"/>
+
+  <!-- the card behind -->
+  <rect x="296" y="292" width="432" height="532" rx="58" fill="#fff" fill-opacity="0.2"
+        transform="rotate(-13 512 558)"/>
+
+  <!-- the card being chosen -->
+  <g transform="rotate(8 512 520)" filter="url(#shadow)">
+    <rect x="302" y="246" width="420" height="548" rx="58" fill="#fff"/>
+    <rect x="338" y="282" width="348" height="348" rx="30" fill="url(#photo)"/>
+    <g clip-path="url(#photo-clip)">
+      <circle cx="604" cy="372" r="42" fill="#fff"/>
+      <path d="M338 630 V556 L446 446 L540 540 L592 488 L686 582 V630 Z" fill="#fff" fill-opacity="0.92"/>
+    </g>
+    <rect x="338" y="682" width="190" height="30" rx="15" fill="#0a0a0a" fill-opacity="0.18"/>
+    <circle cx="644" cy="697" r="42" fill="#0a0a0a"/>
+    <path d="M624 698 L639 713 L666 683" fill="none" stroke="#fff" stroke-width="13" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

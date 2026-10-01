@@ -1,70 +1,57 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
-import type { Stats } from './types';
 import { apiSession } from './api';
+import SettingsSheet from './components/SettingsSheet';
 import SetupScreen from './components/SetupScreen';
 import ViewerScreen from './components/ViewerScreen';
-import SettingsScreen from './components/SettingsScreen';
 
-type Screen = 'setup' | 'viewer' | 'settings';
+type Screen = 'boot' | 'setup' | 'viewer';
 
 export default function App() {
-  const [screen, setScreen] = useState<Screen>('setup');
-  const [initialStats, setInitialStats] = useState<Stats>({ kept: 0, deleted: 0, later: 0 });
-  const [startDone, setStartDone] = useState(false);
+  const [screen, setScreen] = useState<Screen>('boot');
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsVersion, setSettingsVersion] = useState(0);
 
-  // Session restore on mount
+  // Resume the last session if its folder still exists.
   useEffect(() => {
     let cancelled = false;
-    void (async () => {
-      try {
-        const data = await apiSession();
-        if (cancelled) return;
-        if (!data.active) return;
-
-        setInitialStats(data.stats ?? { kept: 0, deleted: 0, later: 0 });
-
-        if (data.index !== undefined && data.total !== undefined && data.index >= data.total) {
-          setStartDone(true);
-        }
-        setScreen('viewer');
-      } catch {
-        // No session — stay on setup
-      }
-    })();
+    apiSession()
+      .then(data => { if (!cancelled) setScreen(data.active ? 'viewer' : 'setup'); })
+      .catch(() => { if (!cancelled) setScreen('setup'); });
     return () => { cancelled = true; };
   }, []);
 
-  function handleFolderSelected(_folder: string, stats: Stats, startDone: boolean) {
-    setInitialStats(stats);
-    setStartDone(startDone);
-    setScreen('viewer');
-  }
+  const openSettings = useCallback(() => setSettingsOpen(true), []);
+  const closeSettings = useCallback(() => {
+    setSettingsOpen(false);
+    setSettingsVersion(v => v + 1);
+  }, []);
 
-  function handleChooseAnother() {
-    setScreen('setup');
-    setInitialStats({ kept: 0, deleted: 0, later: 0 });
-    setStartDone(false);
-  }
-
-  if (screen === 'viewer') {
-    return (
-      <ViewerScreen
-        initialStats={initialStats}
-        startDone={startDone}
-        onChooseAnother={handleChooseAnother}
-      />
-    );
-  }
-
-  if (screen === 'settings') {
-    return <SettingsScreen onBack={() => setScreen('setup')} />;
-  }
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if ((e.ctrlKey || e.metaKey) && e.key === ',') {
+        e.preventDefault();
+        setSettingsOpen(true);
+      }
+    }
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   return (
-    <SetupScreen
-      onFolderSelected={handleFolderSelected}
-      onOpenSettings={() => setScreen('settings')}
-    />
+    <div className="app">
+      {screen === 'viewer' && (
+        <ViewerScreen
+          settingsVersion={settingsVersion}
+          blocked={settingsOpen}
+          onChooseAnother={() => setScreen('setup')}
+          onOpenSettings={openSettings}
+        />
+      )}
+      {screen === 'setup' && (
+        <SetupScreen onFolderSelected={() => setScreen('viewer')} onOpenSettings={openSettings} />
+      )}
+      {settingsOpen && <SettingsSheet onClose={closeSettings} />}
+    </div>
   );
 }

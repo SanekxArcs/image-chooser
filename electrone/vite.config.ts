@@ -7,6 +7,10 @@ export default defineConfig({
   build: {
     outDir: '../../out/renderer',
     emptyOutDir: true,
+    target: 'chrome130',
+  },
+  worker: {
+    format: 'es',
   },
   plugins: [react()],
 })

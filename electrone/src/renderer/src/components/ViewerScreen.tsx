@@ -1,583 +1,547 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { flushSync } from 'react-dom';
-import { ChevronLeft } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { ChevronLeft, GalleryHorizontal, GalleryVertical, Loader2, PanelRight } from 'lucide-react';
 
-import type { Action, DisplaySettings, MediaItem, ShortcutFolder, Stats } from '../types';
 import {
   apiAction,
   apiActionShortcut,
   apiApplyPending,
   apiBack,
-  apiCurrent,
   apiGetDisplaySettings,
-  apiGetMediaPath,
   apiGetShortcuts,
-  apiSession,
+  apiQueue,
   apiSkip,
 } from '../api';
-import { folderBaseName, truncateName } from '../utils';
+import { EXIT_DIR, decisionKind } from '../decisions';
+import type { DecisionKind, ExitDir } from '../decisions';
+import { useMediaQuery, useStoredState } from '../hooks';
+import { bitmapCache } from '../media/bitmapCache';
+import { thumbCache } from '../media/thumbCache';
+import type { Action, DisplaySettings, QueueItem, QueueResponse, ShortcutFolder, Stats } from '../types';
+import { folderBaseName, formatCount } from '../utils';
+import Dock from './Dock';
+import type { DockButton, DockHandle } from './Dock';
 import DoneScreen from './DoneScreen';
-import DPad from './DPad';
+import Filmstrip from './Filmstrip';
+import Inspector from './Inspector';
+import { Busy, Toast } from './Overlays';
+import Stage from './Stage';
+import type { StageCard } from './Stage';
+import TitleBar from './TitleBar';
 
 interface Props {
-  initialStats: Stats;
-  startDone: boolean;
+  /** Bumped when settings close so shortcuts and display options reload. */
+  settingsVersion: number;
+  blocked: boolean;
   onChooseAnother: () => void;
+  onOpenSettings: () => void;
 }
 
-interface ImageState {
-  prev: MediaItem;
-  main: MediaItem;
-  peek1: MediaItem;
-  showPeek1: boolean;
-  filename: string;
+// ── Optimistic queue state ────────────────────────────────────────────────────
+// The renderer moves through the queue immediately and tells the main process
+// afterwards, so a decision never waits on disk or IPC before animating.
+
+interface Exiting {
+  item: QueueItem;
+  order: number;
+  dir: ExitDir;
+  decided: DecisionKind;
+  shortcutLabel?: string;
+}
+
+interface ViewState {
+  status: 'loading' | 'ready';
+  folder: string;
+  items: QueueItem[];
   index: number;
-  total: number;
-  done: boolean;
+  decisions: ReadonlyMap<string, string>;
+  history: Array<{ name: string; decision: string }>;
+  exiting: Exiting[];
+  enterFrom?: ExitDir;
 }
 
-const EMPTY: MediaItem = { url: null, isVideo: false };
-const EXIT_DIR: Record<Action, string> = { keep: 'right', delete: 'left', later: 'down' };
+type ViewAction =
+  | { type: 'load'; queue: QueueResponse }
+  | { type: 'advance'; decision: string; shortcutLabel?: string }
+  | { type: 'undo' }
+  | { type: 'exited'; name: string };
 
-function loadMedia(item: MediaItem): Promise<void> {
-  return new Promise(resolve => {
-    if (!item.url || item.isVideo) { resolve(); return; }
-    const img = new Image();
-    img.onload = img.onerror = () => resolve();
-    img.src = item.url;
-  });
-}
+const MAX_EXITING = 6;
 
-async function fetchNextState(): Promise<ImageState> {
-  const data = await apiCurrent();
-  if (data.done) {
-    return { prev: EMPTY, main: EMPTY, peek1: EMPTY, showPeek1: false, filename: '', index: 0, total: data.total ?? 0, done: true };
+function reducer(state: ViewState, action: ViewAction): ViewState {
+  switch (action.type) {
+    case 'load': {
+      const { queue } = action;
+      const decisions = new Map<string, string>();
+      for (const item of queue.items) if (item.decision) decisions.set(item.name, item.decision);
+      return {
+        status: 'ready',
+        folder: queue.folder,
+        items: queue.items.map(({ name, isVideo }) => ({ name, isVideo })),
+        index: queue.index,
+        decisions,
+        history: queue.history,
+        exiting: [],
+      };
+    }
+    case 'advance': {
+      const item = state.items[state.index];
+      if (!item) return state;
+      const kind = decisionKind(action.decision);
+      const decisions = new Map(state.decisions);
+      if (kind === 'skip') decisions.delete(item.name);
+      else decisions.set(item.name, action.decision);
+      const exiting = [
+        ...state.exiting.filter(e => e.item.name !== item.name),
+        { item, order: state.index, dir: EXIT_DIR[kind], decided: kind, shortcutLabel: action.shortcutLabel },
+      ].slice(-MAX_EXITING);
+      return {
+        ...state,
+        index: state.index + 1,
+        decisions,
+        history: [...state.history, { name: item.name, decision: action.decision }],
+        exiting,
+        enterFrom: undefined,
+      };
+    }
+    case 'undo': {
+      const last = state.history[state.history.length - 1];
+      if (!last || state.index === 0) return state;
+      const decisions = new Map(state.decisions);
+      decisions.delete(last.name);
+      return {
+        ...state,
+        index: state.index - 1,
+        decisions,
+        history: state.history.slice(0, -1),
+        exiting: state.exiting.filter(e => e.item.name !== last.name),
+        enterFrom: EXIT_DIR[decisionKind(last.decision)],
+      };
+    }
+    case 'exited':
+      return { ...state, exiting: state.exiting.filter(e => e.item.name !== action.name) };
   }
-  const { total, index, filename } = data;
-  const remaining = total - (index ?? 0) - 1;
-  const mainMedia = await apiGetMediaPath(0);
-  const peek1Media = remaining >= 1 ? await apiGetMediaPath(1) : EMPTY;
-  await Promise.all([loadMedia(mainMedia), remaining >= 1 ? loadMedia(peek1Media) : Promise.resolve()]);
-  return { prev: EMPTY, main: mainMedia, peek1: peek1Media, showPeek1: remaining >= 1, filename: filename ?? '', index: index ?? 0, total, done: false };
 }
 
-const labelBase: React.CSSProperties = {
-  position: 'absolute', top: '14px',
-  fontSize: '0.65rem', fontWeight: 700, padding: '3px 8px',
-  borderRadius: '4px', letterSpacing: '1.5px',
-  textTransform: 'uppercase', opacity: 0, pointerEvents: 'none',
+const INITIAL: ViewState = {
+  status: 'loading', folder: '', items: [], index: 0, decisions: new Map(), history: [], exiting: [],
 };
 
-export default function ViewerScreen({ initialStats, startDone, onChooseAnother }: Props) {
-  const [stats, setStats] = useState<Stats>(initialStats);
-  const [imgState, setImgState] = useState<ImageState>({
-    prev: EMPTY, main: EMPTY, peek1: EMPTY, showPeek1: false,
-    filename: '', index: 0, total: 0, done: startDone,
-  });
-  const [isMuted, setIsMuted] = useState(true);
-  const [isApplying, setIsApplying] = useState(false);
-  const [applyError, setApplyError] = useState('');
-  const [actionError, setActionError] = useState('');
-  const [shortcuts, setShortcuts] = useState<ShortcutFolder[]>([]);
-  const [display, setDisplay] = useState<DisplaySettings>({ truncateLength: 10, layout: 'bottom' });
+// IPC calls run strictly in order. The chain outlives the component so a
+// remount (or leaving the viewer) always waits for decisions still in flight.
+let opChain: Promise<void> = Promise.resolve();
+let generation = 0;
 
-  const busyRef = useRef(false);
-  const cardRef = useRef<HTMLDivElement>(null);
-  const labelKeepRef = useRef<HTMLDivElement>(null);
-  const labelDeleteRef = useRef<HTMLDivElement>(null);
-  const labelLaterRef = useRef<HTMLDivElement>(null);
-  const labelShortcutRef = useRef<HTMLDivElement>(null);
-  const btnKeepRef = useRef<HTMLButtonElement>(null);
-  const btnDeleteRef = useRef<HTMLButtonElement>(null);
-  const btnLaterRef = useRef<HTMLButtonElement>(null);
-  const btnUndoRef = useRef<HTMLButtonElement>(null);
-  const btnSkipRef = useRef<HTMLButtonElement>(null);
-
-  useEffect(() => {
-    void apiGetShortcuts().then(setShortcuts);
-    void apiGetDisplaySettings().then(setDisplay);
-  }, []);
-
-  const resetLabels = useCallback(() => {
-    if (labelKeepRef.current)   labelKeepRef.current.style.opacity   = '0';
-    if (labelDeleteRef.current) labelDeleteRef.current.style.opacity = '0';
-    if (labelLaterRef.current)  labelLaterRef.current.style.opacity  = '0';
-    if (labelShortcutRef.current) labelShortcutRef.current.style.opacity = '0';
-  }, []);
-
-  // Preserve current main as prev when applying new state
-  const applyState = useCallback((newState: ImageState) => {
-    resetLabels();
-    setImgState(cur => ({ ...newState, prev: cur.main }));
-  }, [resetLabels]);
-
-  const withTransition = useCallback(async (exitDir: string, fetchFn: () => Promise<ImageState>) => {
-    const newState = await fetchFn();
-    document.documentElement.dataset.exit = exitDir;
-    if (document.startViewTransition) {
-      await document.startViewTransition(() => { flushSync(() => applyState(newState)); }).finished;
-    } else {
-      applyState(newState);
+function enqueue(op: () => Promise<unknown>, onError: (error: unknown) => void): void {
+  const gen = generation;
+  opChain = opChain.then(async () => {
+    if (gen !== generation) return; // superseded by a resync
+    try {
+      await op();
+    } catch (error) {
+      generation++;
+      onError(error);
     }
-    delete document.documentElement.dataset.exit;
-  }, [applyState]);
+  });
+}
+
+function settle(): Promise<void> {
+  return opChain;
+}
+
+const DEFAULT_DISPLAY: DisplaySettings = { truncateLength: 14, layout: 'bottom' };
+
+export default function ViewerScreen({ settingsVersion, blocked, onChooseAnother, onOpenSettings }: Props) {
+  const [state, dispatch] = useReducer(reducer, INITIAL);
+  // A synchronous mirror of the reducer state, so two key presses that land
+  // before React re-renders still each act on the right file.
+  const live = useRef(INITIAL);
+  const act = useCallback((action: ViewAction) => {
+    live.current = reducer(live.current, action);
+    dispatch(action);
+  }, []);
+  const [shortcuts, setShortcuts] = useState<ShortcutFolder[]>([]);
+  const [display, setDisplay] = useState<DisplaySettings>(DEFAULT_DISPLAY);
+  const [muted, setMuted] = useState(true);
+  const [zoomAt, setZoomAt] = useState<{ x: number; y: number } | null>(null);
+  const [toast, setToast] = useState('');
+  const [busy, setBusy] = useState<string | null>(null);
+  const [applyResult, setApplyResult] = useState<{ error: string; remaining: number } | null>(null);
+  const syncing = useRef(false);
+  const dockRef = useRef<DockHandle>(null);
+
+  const ultra = useMediaQuery('(min-aspect-ratio: 2/1) and (min-width: 1600px)');
+  const wide = useMediaQuery('(min-width: 1180px)');
+  const compact = useMediaQuery('(max-width: 720px), (max-height: 600px)');
+  const [inspectorPref, setInspectorPref] = useStoredState<'open' | 'closed' | null>('ic.inspector', null);
+  const [stripPref, setStripPref] = useStoredState<boolean>('ic.filmstrip', true);
+
+  const { items, index, decisions, history, status } = state;
+  const total = items.length;
+  const current = items[index] ?? null;
+  const done = status === 'ready' && index >= total;
+
+  const resync = useCallback(() => {
+    syncing.current = true;
+    opChain = opChain.then(async () => {
+      try {
+        act({ type: 'load', queue: await apiQueue() });
+      } catch { /* keep the optimistic view; the next action will retry */ }
+      syncing.current = false;
+    });
+  }, [act]);
+
+  const fail = useCallback((message: string) => () => {
+    setToast(message);
+    resync();
+  }, [resync]);
+
+  // Initial load waits for any decisions still in flight from a previous mount.
+  useEffect(() => {
+    let alive = true;
+    void settle().then(apiQueue).then(queue => {
+      if (alive) act({ type: 'load', queue });
+    }).catch(() => {
+      if (alive) setToast('Could not load this folder. Try choosing it again.');
+    });
+    return () => {
+      alive = false;
+      bitmapCache.clear();
+      thumbCache.clear();
+    };
+  }, [act]);
 
   useEffect(() => {
-    if (startDone) return;
-    void fetchNextState()
-      .then(state => setImgState(state))
-      .catch(() => setActionError('Could not load the current media item. Try choosing the folder again.'));
-  }, [startDone]);
+    void apiGetShortcuts().then(setShortcuts).catch(() => {});
+    void apiGetDisplaySettings().then(setDisplay).catch(() => {});
+  }, [settingsVersion]);
 
-  // Apply all queued file moves when processing is done
+  // Keep the photos around the current one decoded, nearest first.
   useEffect(() => {
-    if (!imgState.done) return;
-    setIsApplying(true);
-    void apiApplyPending()
-      .then(result => {
-        if (!result.applied) {
-          setApplyError(`Some files could not be moved. ${result.failures[0]?.error ?? 'Review the folder and try again.'}`);
-        }
-      })
-      .catch(() => setApplyError('Could not apply file changes. Review the folder and try again.'))
-      .finally(() => setIsApplying(false));
-  }, [imgState.done]);
+    if (status !== 'ready') return;
+    const order = [0, 1, -1, 2, 3, -2, 4];
+    const names: string[] = [];
+    for (const offset of order) {
+      const item = items[index + offset];
+      if (item && !item.isVideo) names.push(item.name);
+    }
+    bitmapCache.setWanted(names);
+  }, [items, index, status]);
 
-  // Wrap onChooseAnother to flush pending moves first
-  const handleChooseAnother = useCallback(() => {
-    if (busyRef.current) return;
-    busyRef.current = true;
-    setIsApplying(true);
-    setApplyError('');
-    void apiApplyPending()
+  const stats = useMemo<Stats>(() => {
+    const s = { kept: 0, deleted: 0, later: 0 };
+    for (const d of decisions.values()) {
+      if (d === 'keep') s.kept++;
+      else if (d === 'delete') s.deleted++;
+      else if (d === 'later') s.later++;
+    }
+    return s;
+  }, [decisions]);
+
+  const shortcutCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const d of decisions.values()) {
+      if (d.startsWith('shortcut:')) {
+        const key = d.slice('shortcut:'.length);
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+      }
+    }
+    return counts;
+  }, [decisions]);
+
+  const skipped = useMemo(
+    () => history.reduce((n, h) => (h.decision === 'skip' ? n + 1 : n), 0),
+    [history],
+  );
+
+  // ── Decisions ──
+
+  /** The item a new decision applies to, or null while loading or resyncing. */
+  const actionable = useCallback((): QueueItem | null => {
+    const s = live.current;
+    if (syncing.current || s.status !== 'ready') return null;
+    return s.items[s.index] ?? null;
+  }, []);
+
+  const decide = useCallback((action: Action) => {
+    const item = actionable();
+    if (!item) return;
+    setZoomAt(null);
+    act({ type: 'advance', decision: action });
+    enqueue(() => apiAction(action, item.name), fail('Could not record that decision. The view was refreshed.'));
+  }, [act, actionable, fail]);
+
+  const decideShortcut = useCallback((shortcut: ShortcutFolder) => {
+    const item = actionable();
+    if (!item) return;
+    setZoomAt(null);
+    act({ type: 'advance', decision: `shortcut:${shortcut.key}`, shortcutLabel: folderBaseName(shortcut.folderPath) });
+    enqueue(() => apiActionShortcut(shortcut.key, item.name), fail('Could not move that file to the shortcut folder.'));
+  }, [act, actionable, fail]);
+
+  const skip = useCallback(() => {
+    const item = actionable();
+    if (!item) return;
+    setZoomAt(null);
+    act({ type: 'advance', decision: 'skip' });
+    enqueue(() => apiSkip(item.name), fail('Could not skip this file.'));
+  }, [act, actionable, fail]);
+
+  const undo = useCallback(() => {
+    const s = live.current;
+    const last = s.history[s.history.length - 1];
+    if (syncing.current || s.status !== 'ready' || !last || s.index === 0) return;
+    setZoomAt(null);
+    act({ type: 'undo' });
+    enqueue(() => apiBack(last.name), fail('Could not undo. The view was refreshed.'));
+  }, [act, fail]);
+
+  const press = useCallback((button: DockButton) => {
+    dockRef.current?.flash(button);
+    if (button === 'undo') undo();
+    else if (button === 'skip') skip();
+    else decide(button);
+  }, [decide, skip, undo]);
+
+  const onExited = useCallback((name: string) => act({ type: 'exited', name }), [act]);
+  const toggleMute = useCallback(() => setMuted(m => !m), []);
+
+  // ── Leaving / finishing ──
+
+  const leave = useCallback(() => {
+    setBusy('Applying changes…');
+    void settle()
+      .then(apiApplyPending)
       .then(result => {
         if (result.applied) {
           onChooseAnother();
         } else {
-          setApplyError(`Some files could not be moved. ${result.failures[0]?.error ?? 'Review the folder and try again.'}`);
+          setBusy(null);
+          setToast(`Some files could not be moved. ${result.failures[0]?.error ?? ''}`.trim());
+          resync();
         }
       })
-      .catch(() => setApplyError('Could not apply file changes. Review the folder and try again.'))
-      .finally(() => {
-        setIsApplying(false);
-        busyRef.current = false;
+      .catch(() => {
+        setBusy(null);
+        setToast('Could not apply file changes. Review the folder and try again.');
       });
-  }, [onChooseAnother]);
+  }, [onChooseAnother, resync]);
 
-  const flash = useCallback((btn: HTMLButtonElement | null) => {
-    if (!btn) return;
-    btn.classList.remove('flash');
-    void btn.offsetWidth;
-    btn.classList.add('flash');
+  // Apply queued moves once everything has been reviewed.
+  useEffect(() => {
+    if (!done) return;
+    let alive = true;
+    setApplyResult(null);
+    setBusy('Applying changes…');
+    void settle()
+      .then(apiApplyPending)
+      .then(async result => {
+        const queue = await apiQueue().catch(() => null);
+        if (!alive) return;
+        setApplyResult({
+          error: result.applied ? '' : `Some files could not be moved. ${result.failures[0]?.error ?? ''}`.trim(),
+          remaining: queue?.items.length ?? 0,
+        });
+      })
+      .catch(() => {
+        if (alive) setApplyResult({ error: 'Could not apply file changes. Review the folder and try again.', remaining: 0 });
+      })
+      .finally(() => { if (alive) setBusy(null); });
+    return () => { alive = false; };
+  }, [done]);
+
+  const reviewRemaining = useCallback(() => {
+    void apiQueue().then(queue => {
+      setApplyResult(null);
+      act({ type: 'load', queue });
+    }).catch(() => setToast('Could not reload the folder.'));
+  }, [act]);
+
+  // ── Keyboard ──
+
+  const keys = useRef<(e: KeyboardEvent) => void>(() => {});
+  keys.current = (e: KeyboardEvent) => {
+    if (blocked || busy) return;
+    const target = e.target as HTMLElement;
+    if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
+
+    if (e.ctrlKey || e.metaKey) {
+      const key = e.key.toLowerCase();
+      if (key === 'i') { e.preventDefault(); toggleInspector(); }
+      else if (key === 'b') { e.preventDefault(); setStripPref(!stripPref); }
+      return;
+    }
+    if (e.altKey) return;
+
+    if (zoomAt && (e.key === 'Escape' || e.key === 'Enter')) {
+      e.preventDefault();
+      setZoomAt(null);
+      return;
+    }
+    if (e.key === 'Escape') { leave(); return; }
+    if (done || e.repeat) return;
+
+    switch (e.key) {
+      case 'ArrowRight': e.preventDefault(); press('keep'); return;
+      case 'ArrowLeft': e.preventDefault(); press('delete'); return;
+      case 'ArrowDown': e.preventDefault(); press('later'); return;
+      case 'ArrowUp': e.preventDefault(); press('undo'); return;
+      case ' ': e.preventDefault(); press('skip'); return;
+      case 'Shift': toggleMute(); return;
+      case 'Enter':
+        if (current && !current.isVideo) {
+          e.preventDefault();
+          setZoomAt({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
+        }
+        return;
+    }
+    const match = shortcuts.find(s => s.key === e.key.toLowerCase());
+    if (match) decideShortcut(match);
+  };
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => keys.current(e);
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
-  const doAction = useCallback((action: Action) => {
-    if (busyRef.current) return;
-    busyRef.current = true;
-    setActionError('');
-    const labelMap = { keep: labelKeepRef, delete: labelDeleteRef, later: labelLaterRef };
-    const labelEl = labelMap[action].current;
-    if (labelEl) labelEl.style.opacity = '1';
-    void (async () => {
-      try {
-        await apiAction(action);
-        setStats(prev => ({
-          kept:    action === 'keep'   ? prev.kept + 1    : prev.kept,
-          deleted: action === 'delete' ? prev.deleted + 1 : prev.deleted,
-          later:   action === 'later'  ? prev.later + 1   : prev.later,
-        }));
-        await withTransition(EXIT_DIR[action], fetchNextState);
-      } catch {
-        resetLabels();
-        setActionError('Could not move this file. Check that the destination is available and try again.');
-        void apiSession().then(sess => {
-          if (sess.active && sess.stats) setStats(sess.stats);
-        }).catch(() => {});
-      } finally {
-        busyRef.current = false;
-      }
-    })();
-  }, [resetLabels, withTransition]);
+  // ── Layout ──
 
-  const doShortcutAction = useCallback((key: string, folderPath: string) => {
-    if (busyRef.current) return;
-    busyRef.current = true;
-    setActionError('');
-    const labelEl = labelShortcutRef.current;
-    if (labelEl) {
-      const name = folderPath.split(/[/\\]/).filter(Boolean).pop() ?? folderPath;
-      labelEl.textContent = `→ ${name}`;
-      labelEl.style.opacity = '1';
+  const inspectorVisible = inspectorPref === 'open' || (inspectorPref === null && wide);
+  const inspectorMode = !inspectorVisible ? 'hidden' : wide ? 'docked' : 'overlay';
+  function toggleInspector() {
+    setInspectorPref(inspectorVisible ? 'closed' : 'open');
+  }
+  const stripMode = !stripPref || compact ? 'none' : ultra ? 'vertical' : 'horizontal';
+
+  const columns = [stripMode === 'vertical' && 'queue', 'main', inspectorMode === 'docked' && 'inspector']
+    .filter(Boolean) as string[];
+  const rows = ['stage', 'dock', stripMode === 'horizontal' && 'strip'].filter(Boolean) as string[];
+  const gridStyle: React.CSSProperties = {
+    gridTemplateColumns: columns
+      .map(c => (c === 'queue' ? 'clamp(180px, 11vw, 280px)' : c === 'main' ? 'minmax(0, 1fr)' : 'auto'))
+      .join(' '),
+    gridTemplateRows: rows.map(r => (r === 'stage' ? 'minmax(0, 1fr)' : 'auto')).join(' '),
+    gridTemplateAreas: rows.map(r => `"${columns.map(c => (c === 'main' ? r : c)).join(' ')}"`).join(' '),
+  };
+
+  // Folder shortcuts live in the inspector when it is docked and the user chose a side panel.
+  const shortcutsInPanel = display.layout !== 'bottom' && inspectorMode !== 'hidden';
+
+  const cards = useMemo<StageCard[]>(() => {
+    const list: StageCard[] = [];
+    const next = items[index + 1];
+    if (next) list.push({ item: next, role: 'next', order: index + 1 });
+    if (current) list.push({ item: current, role: 'current', order: index, enterFrom: state.enterFrom });
+    for (const e of state.exiting) {
+      if (e.item.name === current?.name || e.item.name === next?.name) continue;
+      list.push({ item: e.item, role: 'exit', order: e.order, dir: e.dir, decided: e.decided, shortcutLabel: e.shortcutLabel });
     }
-    void (async () => {
-      try {
-        await apiActionShortcut(key);
-        await withTransition('skip', fetchNextState);
-      } catch {
-        resetLabels();
-        setActionError('Could not move this file to the shortcut folder. Check the folder and try again.');
-        void apiSession().then(sess => {
-          if (sess.active && sess.stats) setStats(sess.stats);
-        }).catch(() => {});
-      } finally {
-        busyRef.current = false;
-      }
-    })();
-  }, [resetLabels, withTransition]);
+    return list.sort((a, b) => b.order - a.order);
+  }, [items, index, current, state.exiting, state.enterFrom]);
 
-  const doSkip = useCallback(() => {
-    if (busyRef.current) return;
-    busyRef.current = true;
-    setActionError('');
-    void (async () => {
-      try {
-        await apiSkip();
-        await withTransition('skip', fetchNextState);
-      } catch {
-        setActionError('Could not skip this file. Try again.');
-      } finally {
-        busyRef.current = false;
-      }
-    })();
-  }, [withTransition]);
-
-  const doBack = useCallback(() => {
-    if (busyRef.current) return;
-    busyRef.current = true;
-    setActionError('');
-    void (async () => {
-      try {
-        const data = await apiBack();
-        if (data.undoneAction) {
-          setStats(prev => ({
-            kept:    data.undoneAction === 'keep'   ? Math.max(0, prev.kept - 1)    : prev.kept,
-            deleted: data.undoneAction === 'delete' ? Math.max(0, prev.deleted - 1) : prev.deleted,
-            later:   data.undoneAction === 'later'  ? Math.max(0, prev.later - 1)   : prev.later,
-          }));
-        }
-        await withTransition('undo', fetchNextState);
-      } catch {
-        setActionError('Could not undo the last action. Try again.');
-        void apiSession().then(sess => {
-          if (sess.active && sess.stats) setStats(sess.stats);
-        }).catch(() => {});
-      } finally {
-        busyRef.current = false;
-      }
-    })();
-  }, [withTransition]);
-
-  useEffect(() => {
-    function onKeyDown(e: KeyboardEvent) {
-      if (imgState.done) return;
-      if ((e.target as HTMLElement).tagName === 'INPUT') return;
-      switch (e.key) {
-        case 'ArrowRight': flash(btnKeepRef.current);   doAction('keep');   return;
-        case 'ArrowLeft':  flash(btnDeleteRef.current); doAction('delete'); return;
-        case 'ArrowDown':  flash(btnLaterRef.current);  doAction('later');  return;
-        case 'ArrowUp':    flash(btnUndoRef.current);   doBack();           return;
-        case ' ':          e.preventDefault(); flash(btnSkipRef.current); doSkip(); return;
-        case 'Escape':     handleChooseAnother(); return;
-        case 'Shift':      setIsMuted(prev => !prev); return;
-      }
-      const match = shortcuts.find(s => s.key === e.key.toLowerCase());
-      if (match) doShortcutAction(match.key, match.folderPath);
-    }
-    document.addEventListener('keydown', onKeyDown);
-    return () => document.removeEventListener('keydown', onKeyDown);
-  }, [doAction, doBack, doSkip, doShortcutAction, flash, imgState.done, handleChooseAnother, shortcuts]);
-
-  // Drag on main card
-  useEffect(() => {
-    if (!cardRef.current) return;
-    const card = cardRef.current;
-    let dragStart: { x: number; y: number } | null = null;
-
-    function onPointerDown(e: PointerEvent) {
-      dragStart = { x: e.clientX, y: e.clientY };
-      card.setPointerCapture(e.pointerId);
-    }
-    function onPointerMove(e: PointerEvent) {
-      if (!dragStart) return;
-      const dx = e.clientX - dragStart.x;
-      const dy = e.clientY - dragStart.y;
-      card.style.transform = `translate(${dx * 0.4}px, ${dy * 0.2}px) rotate(${dx * 0.025}deg)`;
-      const t = 60;
-      if (labelKeepRef.current)
-        labelKeepRef.current.style.opacity = dx > t ? String(Math.min((dx - t) / 60, 1)) : '0';
-      if (labelDeleteRef.current)
-        labelDeleteRef.current.style.opacity = dx < -t ? String(Math.min((-dx - t) / 60, 1)) : '0';
-      if (labelLaterRef.current)
-        labelLaterRef.current.style.opacity = dy > t ? String(Math.min((dy - t) / 60, 1)) : '0';
-    }
-    function onPointerUp(e: PointerEvent) {
-      if (!dragStart) return;
-      const dx = e.clientX - dragStart.x;
-      const dy = e.clientY - dragStart.y;
-      dragStart = null;
-      card.style.transform = '';
-      resetLabels();
-      if (dx > 100)       doAction('keep');
-      else if (dx < -100) doAction('delete');
-      else if (dy > 100)  doAction('later');
-    }
-    card.addEventListener('pointerdown', onPointerDown);
-    card.addEventListener('pointermove', onPointerMove);
-    card.addEventListener('pointerup', onPointerUp);
-    return () => {
-      card.removeEventListener('pointerdown', onPointerDown);
-      card.removeEventListener('pointermove', onPointerMove);
-      card.removeEventListener('pointerup', onPointerUp);
-    };
-  }, [doAction, resetLabels]);
-
-  const { index, total, filename, done, main, peek1, prev, showPeek1 } = imgState;
-  const left = total - index;
+  const folderName = folderBaseName(state.folder);
 
   return (
-    <div className="flex flex-col overflow-hidden" style={{ height: '100vh', background: 'var(--bg)' }}>
+    <>
+      <TitleBar
+        onOpenSettings={onOpenSettings}
+        progress={total ? index / total : 0}
+        left={(
+          <button type="button" className="ghost-btn" onClick={leave} title="Choose another folder (Esc)">
+            <ChevronLeft size={16} strokeWidth={2} />
+            <span>{folderName || 'Folder'}</span>
+          </button>
+        )}
+        center={!done && current && !compact ? (
+          <>
+            <span className="name">{current.name}</span>
+            <span className="count tabular">{formatCount(index + 1)} / {formatCount(total)}</span>
+          </>
+        ) : undefined}
+        right={!done && (
+          <>
+            {!compact && (
+              <button
+                type="button"
+                className="icon-btn"
+                aria-pressed={stripPref}
+                onClick={() => setStripPref(!stripPref)}
+                title="Filmstrip (Ctrl+B)"
+              >
+                {ultra ? <GalleryVertical size={17} strokeWidth={1.8} /> : <GalleryHorizontal size={17} strokeWidth={1.8} />}
+              </button>
+            )}
+            <button
+              type="button"
+              className="icon-btn"
+              aria-pressed={inspectorVisible}
+              onClick={toggleInspector}
+              title="Details panel (Ctrl+I)"
+            >
+              <PanelRight size={17} strokeWidth={1.8} />
+            </button>
+          </>
+        )}
+      />
 
-      {/* Applying overlay */}
-      {isApplying && (
-        <div style={{
-          position: 'fixed', inset: 0, zIndex: 100,
-          background: 'rgba(0,0,0,0.75)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}>
-          <span style={{ color: 'var(--text)', fontSize: '0.9rem', fontWeight: 500 }}>
-            Applying changes…
-          </span>
-        </div>
-      )}
-
-      {/* ── Top bar ── */}
-      <div className="flex-shrink-0 flex items-center relative px-3" style={{ height: '36px' }}>
-        {/* Folder button (Esc) */}
-        <button
-          type="button"
-          onClick={handleChooseAnother}
-          title="Back to folder (Esc)"
-          className="flex items-center gap-1 text-xs transition-colors"
-          style={{
-            background: 'none', border: 'none', cursor: 'pointer',
-            color: 'var(--muted)', padding: '4px 6px',
-            borderRadius: 'var(--radius)',
-          }}
-          onMouseEnter={e => { e.currentTarget.style.color = 'var(--text)'; }}
-          onMouseLeave={e => { e.currentTarget.style.color = 'var(--muted)'; }}
-        >
-          <ChevronLeft size={13} strokeWidth={2} />
-          <span>Folder</span>
-        </button>
-
-        {/* Filename */}
-        <span
-          className="absolute left-0 right-0 text-center text-xs truncate pointer-events-none"
-          style={{ color: 'var(--text)', opacity: done ? 0 : 0.75, paddingInline: '80px' }}
-        >
-          {filename}
-        </span>
-
-        {/* Count */}
-        <span className="ml-auto text-xs tabular-nums font-medium" style={{ color: 'var(--muted)' }}>
-          {done ? '' : `${left} left`}
-        </span>
-      </div>
-
-      {/* Separator */}
-      <div style={{ height: '1px', flexShrink: 0, background: 'var(--border)' }} />
-
-      {/* ── Media area ── */}
-      {done ? (
-        <div className="flex-1 flex items-center justify-center">
-          <DoneScreen stats={stats} onChooseAnother={handleChooseAnother} />
-        </div>
-      ) : (
-        <div className="flex-1 min-h-0 flex gap-1.5 p-1.5">
-
-          {display.layout === 'left' && <ShortcutRail shortcuts={shortcuts} display={display} />}
-
-          {/* Left — prev media */}
-          <SidePanel media={prev} side="left" />
-
-          {/* Center — main card (drag target) */}
-          <div
-            ref={cardRef}
-            className="flex-1 min-w-0 relative overflow-hidden"
-            style={{
-              background: 'var(--surface)',
-              border: '1px solid var(--border)',
-              borderRadius: 'var(--radius)',
-              userSelect: 'none',
-            }}
-          >
-            {main.url && (main.isVideo ? (
-              <video
-                key={main.url}
-                src={main.url} autoPlay loop muted={isMuted} playsInline draggable={false}
-                onError={() => {
-                  console.error('Video error:', main.url);
-                  // Optionally skip automatically if it's broken
-                  // doSkip(); 
-                }}
-                onCanPlay={() => {
-                  // Video is ready, maybe hide a loader if we had one
-                }}
-                style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block', viewTransitionName: 'main-card' }}
-              />
-            ) : (
-              <img
-                src={main.url} alt="" draggable={false}
-                style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block', viewTransitionName: 'main-card' }}
-              />
-            ))}
-            {/* Drag labels */}
-            <div ref={labelKeepRef}   style={{ ...labelBase, right: '12px', background: 'rgba(5,25,15,0.9)', border: '1px solid var(--keep)',   color: 'var(--keep)'   }}>Keep</div>
-            <div ref={labelDeleteRef} style={{ ...labelBase, left: '12px',  background: 'rgba(25,5,10,0.9)', border: '1px solid var(--delete)', color: 'var(--delete)' }}>Delete</div>
-            <div ref={labelLaterRef}  style={{ ...labelBase, left: '50%', transform: 'translateX(-50%)', background: 'rgba(20,15,5,0.9)', border: '1px solid var(--later)',  color: 'var(--later)'  }}>Later</div>
-            <div ref={labelShortcutRef} style={{ ...labelBase, top: 'auto', bottom: '14px', left: '50%', transform: 'translateX(-50%)', background: 'rgba(10,10,20,0.9)', border: '1px solid var(--muted)', color: 'var(--text)' }} />
-          </div>
-
-          {/* Right — next media */}
-          {showPeek1 && <SidePanel media={peek1} side="right" />}
-          {!showPeek1 && <div style={{ width: '144px', flexShrink: 0 }} />}
-
-          {display.layout === 'right' && <ShortcutRail shortcuts={shortcuts} display={display} />}
-
-        </div>
-      )}
-
-      {/* ── Buttons ── */}
-      {!done && (
-        <div className="flex-shrink-0 flex justify-center py-2.5">
-          <DPad
-            onKeep={() => { flash(btnKeepRef.current); doAction('keep'); }}
-            onDelete={() => { flash(btnDeleteRef.current); doAction('delete'); }}
-            onLater={() => { flash(btnLaterRef.current); doAction('later'); }}
-            onUndo={() => { flash(btnUndoRef.current); doBack(); }}
-            onSkip={() => { flash(btnSkipRef.current); doSkip(); }}
-            btnKeepRef={btnKeepRef}
-            btnDeleteRef={btnDeleteRef}
-            btnLaterRef={btnLaterRef}
-            btnUndoRef={btnUndoRef}
-            btnSkipRef={btnSkipRef}
+      {status === 'loading' ? (
+        <div className="screen"><Loader2 size={22} className="spin" style={{ color: 'var(--text-3)' }} /></div>
+      ) : done ? (
+        applyResult ? (
+          <DoneScreen
             stats={stats}
+            error={applyResult.error}
+            remaining={applyResult.remaining}
+            onReviewRemaining={reviewRemaining}
+            onChooseAnother={onChooseAnother}
           />
+        ) : <div className="screen" />
+      ) : (
+        <div className={`viewer${compact ? ' viewer--compact' : ''}`} style={gridStyle}>
+          {stripMode === 'vertical' && (
+            <Filmstrip items={items} index={index} decisions={decisions} orientation="vertical" />
+          )}
+          <Stage
+            cards={cards}
+            muted={muted}
+            zoomAt={zoomAt}
+            compact={compact}
+            onDecide={decide}
+            onExited={onExited}
+            onZoom={setZoomAt}
+            onToggleMute={toggleMute}
+          />
+          <Dock
+            ref={dockRef}
+            stats={stats}
+            canUndo={history.length > 0}
+            shortcuts={shortcutsInPanel ? null : shortcuts}
+            display={display}
+            onPress={press}
+            onShortcut={decideShortcut}
+          />
+          {stripMode === 'horizontal' && (
+            <Filmstrip items={items} index={index} decisions={decisions} orientation="horizontal" />
+          )}
+          {inspectorMode !== 'hidden' && (
+            <Inspector
+              item={current}
+              index={index}
+              total={total}
+              stats={stats}
+              skipped={skipped}
+              shortcuts={shortcutsInPanel ? shortcuts : null}
+              shortcutCounts={shortcutCounts}
+              display={display}
+              overlay={inspectorMode === 'overlay'}
+              onShortcut={decideShortcut}
+            />
+          )}
         </div>
       )}
 
-      {/* ── Shortcut legend (bottom layout) ── */}
-      {!done && display.layout === 'bottom' && (
-        <ShortcutBar shortcuts={shortcuts} display={display} />
-      )}
-
-      {(applyError || actionError) && (
-        <p
-          role="alert"
-          className="flex-shrink-0 px-3 pb-2 text-center text-xs"
-          style={{ color: 'var(--delete)' }}
-        >
-          {actionError || applyError}
-        </p>
-      )}
-    </div>
-  );
-}
-
-// ── Shortcut legend ───────────────────────────────────────────────────────────
-
-const kbdStyle: React.CSSProperties = {
-  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-  fontSize: '0.65rem', fontFamily: 'monospace', fontWeight: 700,
-  padding: '1px 5px', minWidth: '16px',
-  background: 'var(--bg)', border: '1px solid var(--border-2)', borderRadius: '4px',
-  color: 'var(--text)', textTransform: 'uppercase',
-};
-
-function ShortcutBar({ shortcuts, display }: { shortcuts: ShortcutFolder[]; display: DisplaySettings }) {
-  if (shortcuts.length === 0) return null;
-  return (
-    <div className="flex-shrink-0 flex flex-wrap justify-center gap-2 px-3 pb-2.5">
-      {shortcuts.map(s => {
-        const name = folderBaseName(s.folderPath);
-        return (
-          <div
-            key={s.key}
-            title={name}
-            className="flex items-center gap-1.5 text-xs"
-            style={{
-              background: 'var(--surface)', border: '1px solid var(--border)',
-              borderRadius: 'var(--radius)', padding: '4px 8px', color: 'var(--muted)',
-            }}
-          >
-            <kbd style={kbdStyle}>{s.key}</kbd>
-            <span>{truncateName(name, display.truncateLength)}</span>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function ShortcutRail({ shortcuts, display }: { shortcuts: ShortcutFolder[]; display: DisplaySettings }) {
-  if (shortcuts.length === 0) return null;
-  return (
-    <div className="flex flex-col gap-1.5 overflow-y-auto" style={{ width: '84px', flexShrink: 0 }}>
-      {shortcuts.map(s => {
-        const name = folderBaseName(s.folderPath);
-        return (
-          <div
-            key={s.key}
-            title={name}
-            className="flex flex-col items-center gap-1 text-center"
-            style={{
-              background: 'var(--surface)', border: '1px solid var(--border)',
-              borderRadius: 'var(--radius)', padding: '6px 4px', flexShrink: 0,
-            }}
-          >
-            <kbd style={kbdStyle}>{s.key}</kbd>
-            <span className="truncate w-full" style={{ fontSize: '0.6rem', color: 'var(--muted)' }}>
-              {truncateName(name, display.truncateLength)}
-            </span>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-// ── Side panel ────────────────────────────────────────────────────────────────
-
-function SidePanel({ media, side }: { media: MediaItem; side: 'left' | 'right' }) {
-  const fadeGradient = side === 'left'
-    ? 'linear-gradient(to right, var(--bg) 0%, transparent 45%, var(--bg) 100%)'
-    : 'linear-gradient(to left, var(--bg) 0%, transparent 45%, var(--bg) 100%)';
-
-  return (
-    <div
-      style={{
-        width: '144px', flexShrink: 0, position: 'relative', overflow: 'hidden',
-        background: 'var(--surface)',
-        border: '1px solid var(--border)',
-        borderRadius: 'var(--radius)',
-      }}
-    >
-      {media.url && (
-        media.isVideo ? (
-          <video
-            key={media.url}
-            src={media.url} autoPlay loop muted playsInline draggable={false}
-            style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', opacity: 0.45 }}
-          />
-        ) : (
-          <img
-            src={media.url} alt="" draggable={false}
-            style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', opacity: 0.45 }}
-          />
-        )
-      )}
-      {/* Fade vignette */}
-      <div style={{ position: 'absolute', inset: 0, background: fadeGradient, pointerEvents: 'none' }} />
-    </div>
+      {busy && <Busy label={busy} />}
+      {toast && <Toast message={toast} onClose={() => setToast('')} />}
+    </>
   );
 }
